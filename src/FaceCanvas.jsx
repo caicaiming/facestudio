@@ -1,0 +1,631 @@
+/**
+ * FaceCanvas.jsx —— 分层绘制
+ * 68 点索引规范见《开发文档》第 4 章；锚点说明见 anchors.js。
+ *
+ * 图层分工（自下而上）：
+ *   img      原图（浏览器原生渲染）
+ *   warp     形变结果（adjustment 视图接管显示，其余视图隐藏）
+ *   overlay  三庭分界线、中轴线、对称偏差连线
+ *   mesh     三角网格、关键点
+ *
+ * 调整视图下 warp 层覆盖 img：照片本身跟随滑块形变，而非只有网格线在动。
+ *
+ * 点集布局（索引顺序固定）：
+ *   0–67   68 个关键点
+ *   68–75  8 个外围锚点（anchors.js）
+ *   76+    用户自定义控制点（customCount 个）
+ *
+ * 同一组件承担两种角色（由 showWarp / overlay 决定）：
+ *   - 主图：showWarp=false，始终显示原图，叠加层按 overlay 绘制
+ *   - 预览：showWarp=true，显示形变后的照片，overlay='none' 时不画任何线条
+ */
+
+import { useEffect, useRef, useState } from 'react'
+import { TRIANGLES } from './triangles.js'
+import { RIGHT_HALF, LEFT_HALF, fitLine, mirrorPoint } from './measure.js'
+import { createWarper } from './warp.js'
+import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
+
+/** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
+const MAX_EDGE = 1600
+
+/** 空态默认文案 */
+const EMPTY = {
+  title: '上传一张正面人脸照开始分析',
+  hint: '建议使用光线均匀、无遮挡的正面照',
+}
+
+/**
+ * 点位标记的目标【屏幕尺寸】（CSS 像素）。
+ *
+ * ⚠️ 画布按图片自然像素开尺寸，而图片在页面上被缩小显示（如 1024px 的原图
+ * 只显示 372px）。若标记半径直接取自然像素值，屏幕上会缩小到 1–2px，几乎
+ * 无法瞄准。因此标记尺寸全部按 MARKER_PX（CSS 像素）定义，绘制时乘以换算
+ * 系数 k（1 CSS px 对应的画布像素数），保证任何显示缩放下观感与手感恒定。
+ */
+const MARKER_PX = {
+  meshDot: 2.8, // 网格模式下的小圆点
+  point: 5.2, // 点位模式下的关键点
+  custom: 7, // 自定义控制点菱形
+  select: 9.5, // 选中点高亮环
+  hover: 7.5, // 悬停点提示环
+  faint: 2.4, // 三庭/对称模式下的淡底圆点（保证任何叠加模式下都有可抓目标）
+  hit: 13, // 命中半径（抓取范围）
+  font: 11.5, // 点号字号
+}
+
+/** 自定义点起始索引 */
+export const CUSTOM_BASE = ANCHOR_BASE + ANCHOR_COUNT // 76
+
+const computeScale = (w, h, maxEdge = MAX_EDGE) => Math.min(1, maxEdge / Math.max(w, h))
+
+// ---------------------------------------------------------------- 绘制原语
+
+function drawMesh(ctx, pts, lw, tris, k) {
+  ctx.lineWidth = lw * 0.7
+  ctx.strokeStyle = 'rgba(96, 165, 250, 0.45)'
+  ctx.beginPath()
+  for (let t = 0; t < tris.length; t++) {
+    const [a, b, c] = tris[t]
+    const pa = pts[a]
+    const pb = pts[b]
+    const pc = pts[c]
+    if (!pa || !pb || !pc) continue
+    ctx.moveTo(pa.x, pa.y)
+    ctx.lineTo(pb.x, pb.y)
+    ctx.lineTo(pc.x, pc.y)
+    ctx.closePath()
+  }
+  ctx.stroke()
+
+  // 只画 68 个真实关键点，锚点是辅助点不参与展示
+  const r = Math.max(lw * 1.8, MARKER_PX.meshDot * k)
+  ctx.fillStyle = 'rgba(191, 219, 254, 0.95)'
+  ctx.beginPath()
+  for (let i = 0; i < 68 && i < pts.length; i++) {
+    ctx.moveTo(pts[i].x + r, pts[i].y)
+    ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2)
+  }
+  ctx.fill()
+}
+
+/**
+ * 关键点：实心圆 + 深色描边 + 白色高光环。
+ * 三层结构是为了在额头（亮）、头发（暗）、背景（灰）上都保持可辨识轮廓。
+ */
+function drawPoints(ctx, pts, lw, k) {
+  const r = Math.max(lw * 2.6, MARKER_PX.point * k)
+  const ring = Math.max(1, 1.4 * k)
+
+  // 外圈：深色底衬，保证浅色区域也能看清
+  ctx.lineWidth = ring * 2
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)'
+  ctx.fillStyle = 'rgba(59, 130, 246, 0.95)'
+  ctx.beginPath()
+  for (let i = 0; i < 68 && i < pts.length; i++) {
+    ctx.moveTo(pts[i].x + r, pts[i].y)
+    ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2)
+  }
+  ctx.stroke()
+  ctx.fill()
+
+  // 内圈：白色细环，提升锐度
+  ctx.lineWidth = ring
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'
+  ctx.stroke()
+
+  const fs = Math.max(10, Math.round(MARKER_PX.font * k))
+  ctx.font = `${fs}px system-ui, sans-serif`
+  ctx.lineWidth = ring * 2.2
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)'
+  ctx.fillStyle = 'rgba(240, 247, 255, 0.98)'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+  for (let i = 0; i < 68 && i < pts.length; i++) {
+    const y = pts[i].y - r - ring * 2.5
+    ctx.strokeText(String(i), pts[i].x, y)
+    ctx.fillText(String(i), pts[i].x, y)
+  }
+}
+
+/** 淡底圆点：三庭 / 对称模式下没有点位图层，仍给出可抓目标 */
+function drawFaintPoints(ctx, pts, k, count = 68) {
+  const r = Math.max(1.2, MARKER_PX.faint * k)
+  ctx.fillStyle = 'rgba(191, 219, 254, 0.55)'
+  ctx.beginPath()
+  for (let i = 0; i < count && i < pts.length; i++) {
+    ctx.moveTo(pts[i].x + r, pts[i].y)
+    ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2)
+  }
+  ctx.fill()
+}
+
+function drawThree(ctx, pts, metrics, lw) {
+  const xs = pts[0].x
+  const xe = pts[16].x
+  const lines = [
+    { y: metrics && Number.isFinite(metrics.faceTop) ? metrics.faceTop : null, label: '发际线(估算)', color: '#f59e0b' },
+    { y: pts[27].y, label: '眉心', color: '#f87171' },
+    { y: pts[33].y, label: '鼻底', color: '#f87171' },
+    { y: pts[8].y, label: '下巴尖', color: '#94a3b8' },
+  ]
+
+  ctx.save()
+  ctx.setLineDash([lw * 6, lw * 4])
+  ctx.lineWidth = lw
+  ctx.font = `${Math.max(10, Math.round(lw * 11))}px system-ui, sans-serif`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+
+  const ratios = metrics
+    ? [metrics.three.upper, metrics.three.middle, metrics.three.lower]
+    : [null, null, null]
+
+  for (let i = 0; i < lines.length; i++) {
+    const L = lines[i]
+    if (L.y == null) continue
+    ctx.strokeStyle = L.color
+    ctx.beginPath()
+    ctx.moveTo(xs, L.y)
+    ctx.lineTo(xe, L.y)
+    ctx.stroke()
+    ctx.fillStyle = L.color
+    ctx.fillText(L.label, xe + lw * 4, L.y)
+    if (i < 3 && ratios[i] != null && Number.isFinite(ratios[i])) {
+      ctx.fillText(`${(ratios[i] * 100).toFixed(1)}%`, xs + lw * 4, (L.y + lines[i + 1].y) / 2)
+    }
+  }
+  ctx.restore()
+}
+
+/**
+ * 自定义控制点：任何叠加模式下都绘制。
+ * 用户自己加的点是其调整资产，切到「三庭」「对称」等视图时也必须可见可点。
+ */
+function drawCustomPoints(ctx, pts, count, selected, lw, k) {
+  if (!count) return
+  const r = Math.max(lw * 2.8, MARKER_PX.custom * k)
+  const ring = Math.max(1, 1.4 * k)
+  ctx.font = `600 ${Math.max(10, Math.round(MARKER_PX.font * k))}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+
+  for (let n = 0; n < count; n++) {
+    const i = CUSTOM_BASE + n
+    const p = pts[i]
+    if (!p) continue
+
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y - r)
+    ctx.lineTo(p.x + r, p.y)
+    ctx.lineTo(p.x, p.y + r)
+    ctx.lineTo(p.x - r, p.y)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(244, 114, 182, 0.95)'
+    ctx.fill()
+    ctx.lineWidth = ring * 1.6
+    ctx.strokeStyle = i === selected ? '#facc15' : 'rgba(15, 23, 42, 0.85)'
+    ctx.stroke()
+
+    const y = p.y - r - ring * 2.5
+    ctx.lineWidth = ring * 2.2
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)'
+    ctx.strokeText(`C${n + 1}`, p.x, y)
+    ctx.fillStyle = '#fce7f3'
+    ctx.fillText(`C${n + 1}`, p.x, y)
+  }
+}
+
+/**
+ * 悬停提示：白色虚线环 + 点号。让用户按下前就能确认「抓的是哪个点」，
+ * 避免密集区域（如唇周 48–67）误选。
+ */
+function drawHover(ctx, pts, index, lw, k) {
+  const p = pts[index]
+  if (!p) return
+  const r = Math.max(lw * 4, MARKER_PX.hover * k)
+  ctx.save()
+  ctx.setLineDash([Math.max(1.5, 2.5 * k), Math.max(1.5, 2 * k)])
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
+  ctx.lineWidth = Math.max(1, 1.6 * k)
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+
+  const fs = Math.max(10, Math.round(MARKER_PX.font * k))
+  ctx.font = `600 ${fs}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+  const y = p.y - r - Math.max(2, 3 * k)
+  ctx.lineWidth = fs * 0.28
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.95)'
+  ctx.strokeText(String(index < CUSTOM_BASE ? index : `C${index - CUSTOM_BASE + 1}`), p.x, y)
+  ctx.fillStyle = '#fde68a'
+  ctx.fillText(String(index < CUSTOM_BASE ? index : `C${index - CUSTOM_BASE + 1}`), p.x, y)
+}
+
+/** 选中点位高亮：亮环 + 十字，画在最上层保证任何叠加模式下都可见 */
+function drawSelection(ctx, pts, index, lw, k) {
+  const p = pts[index]
+  if (!p) return
+  const r = Math.max(lw * 5, MARKER_PX.select * k)
+  const lwv = Math.max(lw * 1.6, 2 * k)
+  ctx.strokeStyle = '#facc15'
+  ctx.lineWidth = lwv
+
+  // 深色底衬让黄环在浅色皮肤上同样醒目
+  ctx.save()
+  ctx.globalAlpha = 0.5
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)'
+  ctx.lineWidth = lwv * 2
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+  ctx.moveTo(p.x - r * 1.6, p.y)
+  ctx.lineTo(p.x + r * 1.6, p.y)
+  ctx.moveTo(p.x, p.y - r * 1.6)
+  ctx.lineTo(p.x, p.y + r * 1.6)
+  ctx.stroke()
+  ctx.restore()
+
+  ctx.strokeStyle = '#facc15'
+  ctx.lineWidth = lwv
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.moveTo(p.x - r * 1.6, p.y)
+  ctx.lineTo(p.x + r * 1.6, p.y)
+  ctx.moveTo(p.x, p.y - r * 1.6)
+  ctx.lineTo(p.x, p.y + r * 1.6)
+  ctx.stroke()
+}
+
+function drawSymmetry(ctx, pts, lw) {
+  const axis = fitLine([pts[8], pts[27], pts[30]])
+
+  const span = Math.abs(pts[8].y - pts[27].y) * 2.5
+  ctx.strokeStyle = '#22d3ee'
+  ctx.lineWidth = lw * 1.2
+  ctx.beginPath()
+  ctx.moveTo(axis.cx - axis.dx * span, axis.cy - axis.dy * span)
+  ctx.lineTo(axis.cx + axis.dx * span, axis.cy + axis.dy * span)
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)'
+  ctx.lineWidth = lw * 0.8
+  ctx.beginPath()
+  for (let i = 0; i < RIGHT_HALF.length; i++) {
+    const m = mirrorPoint(pts[RIGHT_HALF[i]], axis)
+    const t = pts[LEFT_HALF[i]]
+    ctx.moveTo(m.x, m.y)
+    ctx.lineTo(t.x, t.y)
+  }
+  ctx.stroke()
+
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.9)'
+  ctx.beginPath()
+  for (let i = 0; i < RIGHT_HALF.length; i++) {
+    const m = mirrorPoint(pts[RIGHT_HALF[i]], axis)
+    ctx.moveTo(m.x + lw * 1.6, m.y)
+    ctx.arc(m.x, m.y, lw * 1.6, 0, Math.PI * 2)
+  }
+  ctx.fill()
+}
+
+// ---------------------------------------------------------------- 组件
+
+export default function FaceCanvas({
+  imageSrc,
+  points,
+  srcPoints,
+  overlay,
+  view,
+  metrics,
+  selectedPoint = null,
+  interactive = false,
+  onPointSelect,
+  onPointDrag,
+  triangles = TRIANGLES,
+  customCount = 0,
+  addMode = false,
+  onAddPoint,
+  showWarp,
+  maxEdge = MAX_EDGE,
+  emptyTitle = EMPTY.title,
+  emptyHint = EMPTY.hint,
+  className = '',
+}) {
+  // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
+  const warpOn = showWarp ?? view === 'adjustment'
+  // 'none' 表示纯净照片（预览区），不绘制任何叠加层
+  const drawOverlay = overlay !== 'none' && view !== 'reference'
+  const wrapRef = useRef(null)
+  const imgRef = useRef(null)
+  const warpRef = useRef(null)
+  const overlayRef = useRef(null)
+  const meshRef = useRef(null)
+  const warperRef = useRef(null)
+  const rafRef = useRef(0)
+  const dragRef = useRef(null)
+  const hoverRef = useRef(-1)
+  /** 供指针事件触发重绘（hover 高亮不进 React state，避免每次移动都重渲染） */
+  const scheduleRef = useRef(() => {})
+  const [imgReady, setImgReady] = useState(false)
+
+  // 换图：清空加载态与纹理缓存
+  useEffect(() => {
+    setImgReady(false)
+    if (warperRef.current) {
+      warperRef.current.dispose()
+      warperRef.current = null
+    }
+  }, [imageSrc])
+
+  // 源点集（或图片）变化 → 重建纹理块缓存
+  useEffect(() => {
+    const img = imgRef.current
+    if (!img || !imgReady || !srcPoints) return
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    if (!w || !h) return
+    warperRef.current = createWarper(img, srcPoints, computeScale(w, h, maxEdge), triangles)
+    return () => {
+      if (warperRef.current) {
+        warperRef.current.dispose()
+        warperRef.current = null
+      }
+    }
+  }, [srcPoints, imgReady, triangles])
+
+  useEffect(() => {
+    const img = imgRef.current
+    if (!img || !imageSrc) return
+
+    const render = () => {
+      const w = img.naturalWidth || img.width
+      const h = img.naturalHeight || img.height
+      if (!w || !h) return
+
+      const oc = overlayRef.current
+      const mc = meshRef.current
+      const wc = warpRef.current
+      if (!oc || !mc || !wc) return
+
+      if (oc.width !== w || oc.height !== h) {
+        oc.width = w
+        oc.height = h
+        mc.width = w
+        mc.height = h
+      }
+
+      // ---- warp 层：形变后的照片（draw 内部已绘制底图，网格外保持原样）----
+      const wctx = wc.getContext('2d')
+      if (warpOn && points && warperRef.current) {
+        if (wc.width !== warperRef.current.cw || wc.height !== warperRef.current.ch) {
+          wc.width = warperRef.current.cw
+          wc.height = warperRef.current.ch
+        }
+        const tw = performance.now()
+        warperRef.current.draw(wctx, points)
+        if (import.meta.env.DEV) window.__warpMs = +(performance.now() - tw).toFixed(1)
+      } else {
+        wctx.setTransform(1, 0, 0, 1, 0, 0)
+        wctx.clearRect(0, 0, wc.width, wc.height)
+      }
+
+      // ---- overlay / mesh 层 ----
+      const octx = oc.getContext('2d')
+      const mctx = mc.getContext('2d')
+      octx.clearRect(0, 0, w, h)
+      mctx.clearRect(0, 0, w, h)
+
+      if (!drawOverlay || !points) return
+
+      const lw = Math.max(1, w / 500)
+      // 显示缩放换算：1 CSS 像素对应的画布像素数。标记按屏幕尺寸绘制的关键。
+      const dispW = wrapRef.current?.getBoundingClientRect().width || 0
+      const k = dispW > 0 ? w / dispW : 1
+
+      const tm = performance.now()
+      if (overlay === 'mesh') drawMesh(mctx, points, lw, triangles, k)
+      else if (overlay === 'points') drawPoints(mctx, points, lw, k)
+      else if (overlay === 'three') {
+        drawThree(octx, points, metrics, lw)
+        drawFaintPoints(mctx, points, k)
+      } else if (overlay === 'symmetry') {
+        drawSymmetry(octx, points, lw)
+        drawFaintPoints(mctx, points, k)
+      }
+      drawCustomPoints(mctx, points, customCount, selectedPoint, lw, k)
+      const hov = hoverRef.current
+      if (hov >= 0 && hov !== selectedPoint && hov < points.length) {
+        drawHover(mctx, points, hov, lw, k)
+      }
+      if (selectedPoint != null) drawSelection(mctx, points, selectedPoint, lw, k)
+      if (import.meta.env.DEV) window.__meshMs = +(performance.now() - tm).toFixed(1)
+    }
+
+    const schedule = () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0
+        render()
+      })
+    }
+    scheduleRef.current = schedule
+
+    const onLoad = () => {
+      setImgReady(true)
+      schedule()
+    }
+
+    if (img.complete && (img.naturalWidth || img.width)) {
+      if (!imgReady) setImgReady(true)
+      schedule()
+    }
+    img.addEventListener('load', onLoad)
+    // 显示宽度变化会改变 CSS px → 画布 px 的换算系数，需按新尺度重绘标记
+    window.addEventListener('resize', schedule)
+    return () => {
+      img.removeEventListener('load', onLoad)
+      window.removeEventListener('resize', schedule)
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+    }
+  }, [
+    imageSrc,
+    points,
+    srcPoints,
+    overlay,
+    view,
+    metrics,
+    imgReady,
+    selectedPoint,
+    triangles,
+    customCount,
+  ])
+
+  // ---------------------------------------------------------------- 点位拖拽
+
+  /** 鼠标坐标 → 图片自然像素坐标 */
+  const toNatural = (e) => {
+    const img = imgRef.current
+    const wrap = wrapRef.current
+    if (!img || !wrap) return null
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    if (!w || !h) return null
+    const r = wrap.getBoundingClientRect()
+    if (!r.width || !r.height) return null
+    return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h }
+  }
+
+  /** 可交互点位：68 关键点 + 自定义点（锚点是辅助点，不参与交互） */
+  const isDraggable = (i) => i < 68 || (i >= CUSTOM_BASE && i < CUSTOM_BASE + customCount)
+
+  /**
+   * 命中测试：返回最近可交互点位索引，超出半径返回 -1。
+   * 半径按【屏幕像素】折算（MARKER_PX.hit），图片被缩小显示时抓取范围不会
+   * 跟着缩小；同时对超小图保留 2% 图宽的相对下限，避免整图只有一个命中区。
+   */
+  const hitTest = (p) => {
+    if (!p || !points) return -1
+    const img = imgRef.current
+    const w = img?.naturalWidth || img?.width || 1
+    const dispW = wrapRef.current?.getBoundingClientRect().width || 0
+    const k = dispW > 0 ? w / dispW : 1
+    const hitR = Math.max(w * 0.02, MARKER_PX.hit * k)
+    let best = -1
+    let bestD = Infinity
+    for (let i = 0; i < points.length; i++) {
+      if (!isDraggable(i)) continue
+      const d = Math.hypot(points[i].x - p.x, points[i].y - p.y)
+      if (d < bestD) {
+        bestD = d
+        best = i
+      }
+    }
+    return bestD > hitR ? -1 : best
+  }
+
+  const onPointerDown = (e) => {
+    if (!interactive) return
+    const p = toNatural(e)
+    if (!p) return
+
+    // preventDefault 会阻止焦点转移，导致左栏数值框收不到 blur、键入值滞留。
+    // 这里先主动提交它，保证「改完数字立刻去拖点」时数字一定已生效。
+    const active = document.activeElement
+    if (active && active !== document.body && typeof active.blur === 'function') active.blur()
+
+    const idx = hitTest(p)
+
+    // 加点模式：点在空白处则新建控制点；命中已有点则照常拖动
+    if (addMode && idx < 0) {
+      e.preventDefault()
+      onAddPoint?.(p.x, p.y)
+      return
+    }
+    if (idx < 0) return
+    e.preventDefault()
+    dragRef.current = { index: idx, lastX: p.x, lastY: p.y }
+    e.currentTarget.style.cursor = 'grabbing'
+    onPointSelect?.(idx)
+  }
+
+  const onPointerMove = (e) => {
+    if (!interactive) return
+    const p = toNatural(e)
+    if (!p) return
+    const d = dragRef.current
+    if (d) {
+      // 上报相对上一次移动的增量，由上层累加到该点既有位移上
+      const dx = p.x - d.lastX
+      const dy = p.y - d.lastY
+      d.lastX = p.x
+      d.lastY = p.y
+      if (dx || dy) onPointDrag?.(d.index, dx, dy)
+      return
+    }
+    const idx = hitTest(p)
+    const hit = idx >= 0
+    e.currentTarget.style.cursor = addMode ? (hit ? 'grab' : 'crosshair') : hit ? 'grab' : 'default'
+
+    // hover 变化才重绘：仅更新 ref + 走 rAF，不触发 React 渲染
+    if (idx !== hoverRef.current) {
+      hoverRef.current = idx
+      scheduleRef.current()
+    }
+  }
+
+  const endDrag = () => {
+    if (dragRef.current) {
+      dragRef.current = null
+      if (wrapRef.current) wrapRef.current.style.cursor = 'default'
+    }
+    if (hoverRef.current !== -1) {
+      hoverRef.current = -1
+      scheduleRef.current()
+    }
+  }
+
+  return (
+    <div
+      className={`canvas-wrap${addMode ? ' add-mode' : ''}${className ? ` ${className}` : ''}`}
+      ref={wrapRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerLeave={endDrag}
+    >
+      {imageSrc ? (
+        <>
+          {/* visibility 而非 opacity：隐藏时不参与绘制，但仍占位保持布局 */}
+          <img
+            ref={imgRef}
+            src={imageSrc}
+            alt="待分析的人脸照片"
+            draggable={false}
+            style={{ visibility: warpOn ? 'hidden' : 'visible' }}
+          />
+          {/* display:none 而非 opacity:0：非调整视图让整层退出合成，减少每帧开销 */}
+          <canvas
+            ref={warpRef}
+            className="layer warp"
+            style={{ display: warpOn ? 'block' : 'none' }}
+          />
+          <canvas ref={overlayRef} className="layer overlay" />
+          <canvas ref={meshRef} className="layer mesh" />
+        </>
+      ) : (
+        <div className="canvas-empty">
+          <div className="canvas-empty-icon">＋</div>
+          <p>{emptyTitle}</p>
+          <p className="dim">{emptyHint}</p>
+        </div>
+      )}
+    </div>
+  )
+}
