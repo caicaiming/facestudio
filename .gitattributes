@@ -1,6 +1,10 @@
 # 统一文本文件的仓库内行尾为 LF，检出时按平台转换
 * text=auto eol=lf
 
+# Windows 批处理：检出时必须保持 CRLF，否则 cmd 解析 label / 括号块会出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # 二进制文件禁止任何转换
 *.png binary
 *.jpg binary
