@@ -8,11 +8,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { generateLandmarks } from '../src/measure.js'
-import { buildFrame, project } from '../src/frame.js'
+import { buildFrame, frameFaceWidth, frameOf, project, unproject } from '../src/frame.js'
+import { buildAnchors } from '../src/anchors.js'
 import {
   SITES,
   SITE_ZONES,
   applySiteOffsets,
+  earAnchorOffsets,
   emptySites,
   siteAnchors,
   siteOf,
@@ -30,6 +32,14 @@ const longFace = () => {
   return p
 }
 
+/** 长中庭：鼻根以下的点整体下移 1.3 倍（眉线不动 → 眉到鼻底变长） */
+const midLongFace = () => {
+  const p = generateLandmarks(1)
+  const y0 = p[27].y
+  for (const q of p) if (q.y > y0) q.y = y0 + (q.y - y0) * 1.3
+  return p
+}
+
 /** 对点集做相似变换：旋转 θ、缩放 s、平移 (tx,ty) */
 const transform = (pts, { rot = 0, scale = 1, tx = 0, ty = 0 } = {}) => {
   const c = Math.cos(rot)
@@ -44,10 +54,10 @@ const mag = (v) => Math.hypot(v.x, v.y)
 
 // ---------------------------------------------------------------- 1. 表完整性
 
-test('T10a 分区表：8 个分区，key 唯一，lever 合法', () => {
-  assert.equal(SITE_ZONES.length, 8)
+test('T10a 分区表：9 个分区，key 唯一，lever 合法', () => {
+  assert.equal(SITE_ZONES.length, 9)
   const keys = new Set(SITE_ZONES.map((z) => z.key))
-  assert.equal(keys.size, 8)
+  assert.equal(keys.size, 9)
   for (const z of SITE_ZONES) {
     assert.ok(['P0', 'P1', 'P2'].includes(z.lever), `非法 lever: ${z.lever}`)
     assert.ok(z.label && z.note, `${z.key} 缺 label/note`)
@@ -322,4 +332,188 @@ test('T10o 发际线：实测优先，缺失或无效时回退几何估算', () 
   // 实测值低于眉线（扫描失败）时判定无效，回退兜底
   const bad = zoneContext(pts, { hairlineY: pts[27].y + 20 })
   assert.equal(bad.vHairline, fallback.vHairline, '无效实测值应回退兜底')
+})
+
+
+// ---------------------------------------------------------------- 耳部
+
+test('T10p 耳部：分区已注册且三个部位齐全', () => {
+  const zone = SITE_ZONES.find((z) => z.key === 'ear')
+  assert.ok(zone, '应有耳部分区')
+  const list = sitesOf('ear')
+  const keys = list.map((s) => s.key)
+  assert.ok(keys.includes('earBase'), '应有耳基底')
+  assert.ok(keys.includes('earHelix'), '应有耳轮轮廓')
+  assert.ok(keys.includes('earLobe'), '应有耳垂')
+  for (const s of list) {
+    assert.equal(s.virtual, true, s.key + ' 应标记为 virtual')
+    assert.equal(s.pair, true, s.key + ' 应左右成对')
+  }
+})
+
+test('T10q 耳部纵向：耳上缘≈眉线、耳垂≈鼻底，且区间随脸长自适应', () => {
+  const a = zoneContext(ideal())
+  const b = zoneContext(longFace()) // 下庭拉长
+  const c = zoneContext(midLongFace()) // 中庭拉长
+
+  assert.ok(a.vEarTop < a.vBrowTop, '耳上缘应略高于眉线')
+  assert.ok(a.vEarBottom > a.vSubnasal, '耳垂应略低于鼻底')
+  assert.ok(a.earLen > 0, '耳长应为正')
+
+  // 耳长锚定的是中庭（眉→鼻底），下庭拉长不应影响它
+  assert.ok(
+    Math.abs(b.earLen - a.earLen) < 1e-9,
+    '下庭拉长不应改变耳长：' + a.earLen + ' vs ' + b.earLen,
+  )
+  // 中庭变长 → 外推的耳朵随之变长
+  assert.ok(c.earLen > a.earLen, '中庭拉长应让耳长变大')
+  // 无论哪种脸型，耳朵纵向区间始终夹在「眉线与鼻底之间」这个解剖带内
+  for (const x of [b, c]) {
+    assert.ok(x.vEarTop < x.vBrowTop && x.vEarBottom > x.vSubnasal)
+  }
+})
+
+test('T10r 耳部横向：落在面宽之外、外缘锚点之内（才可能被网格带动）', () => {
+  const pts = ideal()
+  const c = zoneContext(pts)
+  const anchors = buildAnchors(pts)
+  const frame = c.frame
+  const W = frameFaceWidth(pts, frame)
+
+  for (const s of sitesOf('ear')) {
+    const cu = s.at(c)
+    const p = unproject(cu, frame)
+    const uAbs = Math.abs(project(p, frame).u)
+    assert.ok(uAbs > c.uHalf * 0.95, s.key + ' 应在面宽外侧，实际 u=' + uAbs)
+    const outer = Math.min(
+      Math.abs(project(anchors[4], frame).u),
+      Math.abs(project(anchors[7], frame).u),
+    )
+    assert.ok(uAbs < outer, s.key + ' 应落在外缘锚点之内，否则网格覆盖不到')
+    const d = Math.hypot(p.x - anchors[4].x, p.y - anchors[4].y)
+    assert.ok(d < W, s.key + ' 距外缘锚点不宜超过一个面宽')
+  }
+})
+
+test('T10s 耳部规范坐标同样满足旋转/缩放/平移不变', () => {
+  const pts = ideal()
+  const c0 = zoneContext(pts)
+  const c1 = zoneContext(transform(pts, { rot: 0.4, scale: 2.3, tx: 120, ty: -70 }))
+  for (const s of sitesOf('ear')) {
+    const a = s.at(c0)
+    const b = s.at(c1)
+    assert.ok(
+      Math.abs(a.u - b.u) < 1e-9 && Math.abs(a.v - b.v) < 1e-9,
+      s.key + ' 规范坐标在相似变换后漂移：(' + a.u + ',' + a.v + ') → (' + b.u + ',' + b.v + ')',
+    )
+  }
+})
+
+test('T10t earAnchorOffsets：无耳部档位时原样返回（短路）', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const zero = earAnchorOffsets(pts, anchors, emptySites())
+  for (let i = 0; i < anchors.length; i++) {
+    assert.equal(zero[i].x, anchors[i].x)
+    assert.equal(zero[i].y, anchors[i].y)
+  }
+  const other = { ...emptySites(), chin: 8 }
+  const same = earAnchorOffsets(pts, anchors, other)
+  assert.equal(same[4].x, anchors[4].x, '非耳部位不应推动锚点')
+})
+
+test('T10u earAnchorOffsets：耳基底 ＋ 档把外缘锚点向外推，− 档内收', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const frame = frameOf(pts)
+  const sign = (u) => (u > 0 ? 1 : -1)
+
+  const out = earAnchorOffsets(pts, anchors, { ...emptySites(), earBase: 15 })
+  const inn = earAnchorOffsets(pts, anchors, { ...emptySites(), earBase: -15 })
+
+  for (const a of [4, 7]) {
+    const base = project(anchors[a], frame)
+    const s = sign(base.u)
+    assert.ok(
+      s * project(out[a], frame).u > s * base.u,
+      '＋档锚点 ' + a + ' 应向外：' + base.u + ' → ' + project(out[a], frame).u,
+    )
+    assert.ok(
+      s * project(inn[a], frame).u < s * base.u,
+      '−档锚点 ' + a + ' 应向内：' + base.u + ' → ' + project(inn[a], frame).u,
+    )
+  }
+})
+
+test('T10v earAnchorOffsets：只动外缘锚点，不动顶/底锚点（避免整脸外扩）', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const out = earAnchorOffsets(pts, anchors, {
+    ...emptySites(),
+    earBase: 15,
+    earHelix: 15,
+    earLobe: 15,
+  })
+  for (const a of [0, 1, 2, 3, 5, 6]) {
+    assert.equal(out[a].x, anchors[a].x, '锚点 ' + a + ' 不应被耳部推动')
+    assert.equal(out[a].y, anchors[a].y)
+  }
+  assert.notEqual(out[4].x, anchors[4].x, '外缘锚点 72 应被推动')
+  assert.notEqual(out[7].x, anchors[7].x, '外缘锚点 75 应被推动')
+})
+
+test('T10w earAnchorOffsets：入参不被修改，且输出为新数组', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const snap = anchors.map((p) => ({ ...p }))
+  const out = earAnchorOffsets(pts, anchors, { ...emptySites(), earHelix: 12 })
+  for (let i = 0; i < anchors.length; i++) {
+    assert.equal(anchors[i].x, snap[i].x, '入参锚点被修改了')
+    assert.equal(anchors[i].y, snap[i].y)
+  }
+  assert.notEqual(out, anchors, '应返回新数组')
+})
+
+test('T10x 耳部档位确实能带动 68 点（否则形变为零）', () => {
+  const pts = ideal()
+  const moved = applySiteOffsets(pts, { ...emptySites(), earBase: 15 })
+  let max = 0
+  for (let i = 0; i < 68; i++) {
+    max = Math.max(max, Math.hypot(moved[i].x - pts[i].x, moved[i].y - pts[i].y))
+  }
+  assert.ok(max > 0.5, '耳基底满档应带动邻近关键点，实测最大位移 ' + max.toFixed(3) + 'px')
+})
+
+
+test('T10y 耳部锚点推动量级：满档位移落在 3%~6% 面宽（可见但不过猛）', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const frame = frameOf(pts)
+  const W = frameFaceWidth(pts, frame)
+
+  for (const s of sitesOf('ear')) {
+    const out = earAnchorOffsets(pts, anchors, { ...emptySites(), [s.key]: 15 })
+    const d = Math.hypot(out[4].x - anchors[4].x, out[4].y - anchors[4].y)
+    const ratio = d / W
+    assert.ok(
+      ratio > 0.02 && ratio < 0.08,
+      s.key + ' 满档锚点位移 ' + (ratio * 100).toFixed(2) + '% 面宽，超出 2%~8% 的合理区间',
+    )
+  }
+})
+
+test('T10z 三个耳部部位满档叠加：总位移仍可控（< 12% 面宽）', () => {
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const W = frameFaceWidth(pts, frameOf(pts))
+  const out = earAnchorOffsets(pts, anchors, {
+    ...emptySites(),
+    earBase: 15,
+    earHelix: 15,
+    earLobe: 15,
+  })
+  for (const a of [4, 7]) {
+    const d = Math.hypot(out[a].x - anchors[a].x, out[a].y - anchors[a].y)
+    assert.ok(d / W < 0.12, '三部位满档叠加位移 ' + ((d / W) * 100).toFixed(2) + '% 面宽，过大')
+  }
 })

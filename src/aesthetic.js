@@ -274,7 +274,10 @@ export function buildPlan(points, ctx = {}) {
       riskText: RISK_TEXT[site.risk],
       note: site.note,
       source: 'manual',
-      evidence: '咨询师手动设定',
+      // virtual 部位（如耳部）在 68 点里没有对应点位，位置是几何推演出来的，
+      // 必须在方案单里显式标注，否则会被误读成检测结果
+      virtual: !!site.virtual,
+      evidence: site.virtual ? '几何推演（该区域无检测点位，仅供参考）' : '咨询师手动设定',
     })
   }
   // 高风险在前，其次按幅度从大到小

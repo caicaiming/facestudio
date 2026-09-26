@@ -29,7 +29,7 @@ import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
 import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
-import { applySiteOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
+import { applySiteOffsets, earAnchorOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
 import { buildPlan, mmScale } from './aesthetic.js'
 import ZonePanel from './ZonePanel.jsx'
 import PlanPanel from './PlanPanel.jsx'
@@ -389,7 +389,10 @@ export default function App() {
       pointOffsets,
     )
     // 锚点软跟随：减小大形变时侧面三角形的剪切，避免发丝纹理拉成条纹
-    const anchorsD = displaceAnchors(anchors, points, d)
+    // 耳部档位额外推动外缘锚点 —— 68 点在耳区没有点，不动锚点就看不到变化
+    const anchorsD = earAnchorOffsets(points, displaceAnchors(anchors, points, d), siteValues, {
+      hairlineY: base?.hairlineY,
+    })
     if (customPoints.length === 0) return d.concat(anchorsD)
     // 自定义点：先跟随邻近关键点的整体形变（IDW），再叠加用户手动位移。
     // 只跟随不手动位移时，它表现为「局部锚定」；拖它则做局部推拉。

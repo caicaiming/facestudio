@@ -127,6 +127,7 @@ export default function PlanPanel({ plan, disabled, gender, ipdMm, onGender, onI
               <div className="plan-meta">
                 <span>{it.direction}</span>
                 {it.doseRef !== '—' && <span>参考 {it.doseRef}</span>}
+                {it.virtual && <span className="plan-virtual">几何推演</span>}
               </div>
               <div className="plan-note">{it.note}</div>
             </li>

@@ -1702,3 +1702,39 @@ body {
   line-height: 1.6;
   color: var(--text-dim);
 }
+
+/* ------------------------------------------------------------------ 虚拟部位标记 */
+
+.su-virtual {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.su-zone-warn {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-left: 2px solid #f59e0b;
+  border-radius: 0 4px 4px 0;
+  background: rgba(245, 158, 11, 0.08);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: #fcd34d;
+}
+
+.su-zone-warn b {
+  color: #fbbf24;
+}
+
+.plan-virtual {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+  font-weight: 700;
+}

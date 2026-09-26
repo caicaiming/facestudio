@@ -161,6 +161,61 @@ if (download) {
 }
 console.log('导出后无报错：', errors.length === 0)
 
+// ---------- ⑨ 耳部（虚拟部位）----------
+console.log('\n=== 耳部（68 点无覆盖，几何推演）===')
+const earZone = page.locator('.zone-block .su-zone', { hasText: '耳部' }).first()
+const earOpenBefore = await earZone.evaluate((e) => e.classList.contains('open'))
+console.log('耳部分区默认展开：', earOpenBefore, '（P2 应为 false）')
+
+await ensureOpen('耳部')
+await page.waitForTimeout(300)
+
+const earRows = await page.evaluate(() =>
+  [...document.querySelectorAll('.zone-block .su-zone')]
+    .filter((z) => z.textContent.includes('耳部'))
+    .flatMap((z) => [...z.querySelectorAll('.su-row')])
+    .map((r) => r.querySelector('.su-name')?.textContent?.trim()),
+)
+console.log('耳部部位：', earRows)
+
+const virtualCount = await page.evaluate(
+  () => document.querySelectorAll('.zone-block .su-virtual').length,
+)
+console.log('「推演」徽标数：', virtualCount, '（应为 3）')
+
+const warn = await page.locator('.zone-block .su-zone-warn').first().textContent().catch(() => null)
+console.log('耳部警示文案存在：', !!warn, warn ? `“${warn.slice(0, 28)}…”` : '')
+
+// 锚点外推：耳基底 ＋15 应把外缘锚点（索引 72 / 75）向外推
+const anchorBefore = await page.evaluate(() => {
+  const p = window.__faceStudio?.previewPoints
+  return p ? [{ x: p[72].x, y: p[72].y }, { x: p[75].x, y: p[75].y }] : null
+})
+await bumpSite('耳基底', 8)
+await page.waitForTimeout(800)
+const anchorAfter = await page.evaluate(() => {
+  const p = window.__faceStudio?.previewPoints
+  return p ? [{ x: p[72].x, y: p[72].y }, { x: p[75].x, y: p[75].y }] : null
+})
+if (anchorBefore && anchorAfter) {
+  const d0 = Math.hypot(anchorAfter[0].x - anchorBefore[0].x, anchorAfter[0].y - anchorBefore[0].y)
+  const d1 = Math.hypot(anchorAfter[1].x - anchorBefore[1].x, anchorAfter[1].y - anchorBefore[1].y)
+  console.log('外缘锚点位移：', d0.toFixed(2), '/', d1.toFixed(2), 'px', d0 > 1 && d1 > 1 ? '(生效)' : '(未生效)')
+} else {
+  console.log('外缘锚点位移：无法读取 previewPoints')
+}
+
+const earPlan = await page.evaluate(() =>
+  [...document.querySelectorAll('.plan-item')]
+    .filter((li) => li.textContent.includes('耳'))
+    .map((li) => li.querySelector('.plan-name')?.textContent?.trim()),
+)
+console.log('方案中的耳部条目：', earPlan)
+const virtualFlag = await page.evaluate(
+  () => document.querySelectorAll('.plan-item .plan-virtual').length,
+)
+console.log('方案「几何推演」标记：', virtualFlag)
+
 // ---------- 归零 ----------
 await page.locator('.zone-block .subunit-head .btn-mini', { hasText: '归零' }).click()
 await page.waitForTimeout(500)

@@ -188,6 +188,13 @@ export default function ZonePanel({
             {open[z.key] && (
               <div className="su-zone-body">
                 <p className="su-zone-focus">{z.note}</p>
+                {z.key === 'ear' && (
+                  <p className="su-zone-warn">
+                    耳区在 68 关键点中无任何点位，位置按「耳上缘≈眉线、耳垂≈鼻底」外推。
+                    <b>需露耳照片</b>；长发遮挡时形变会连带发丝。颅耳角（耳朵立起角度）正面照无法评估，
+                    须看侧面或 45° 斜位。
+                  </p>
+                )}
                 {list.map((site) => {
                   const mm = mmOf(site)
                   const v = values[site.key] ?? 0
@@ -202,6 +209,14 @@ export default function ZonePanel({
                       <span className="su-name">
                         {site.label}
                         <em className={`su-risk ${site.risk}`}>{RISK_LABEL[site.risk]}</em>
+                        {site.virtual && (
+                          <em
+                            className="su-virtual"
+                            title="68 关键点在该区域没有点位，位置为几何推演；形变是近似模拟"
+                          >
+                            推演
+                          </em>
+                        )}
                       </span>
                       <span className="su-hint">
                         {site.projects[0]}

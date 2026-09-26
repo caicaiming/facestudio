@@ -53,6 +53,7 @@ export const SITE_ZONES = [
   { key: 'lip', label: '唇部', lever: 'P1', note: '唇形与容量' },
   { key: 'chin', label: '颏部', lever: 'P0', note: '颏长、颏突度' },
   { key: 'jaw', label: '下颌缘', lever: 'P1', note: '轮廓清晰度、咬肌' },
+  { key: 'ear', label: '耳部', lever: 'P2', note: '耳基底、耳廓轮廓（需露耳）' },
 ]
 
 // ---------------------------------------------------------------- 部位定义
@@ -73,6 +74,11 @@ export const SITE_ZONES = [
  *   doseRef  常规参考剂量（字符串，仅沟通用）
  *   risk     'high' | 'mid' | 'low' 血管风险等级
  *   note     沟通要点
+ *   virtual  true 表示该部位在 68 点里【完全没有对应点】，位置纯几何外推，
+ *            且该处可能没有网格顶点覆盖 —— 形变为近似模拟，不可当作真实解剖效果
+ *   anchorScale 仅 virtual 部位使用：满档（±100）时对外缘锚点的位移量，
+ *            单位为面宽比例。用于把三角网格边界真实推到耳朵外侧
+ *            （控制点附近没有 68 点，不推锚点就看不到任何变化）
  */
 export const SITES = [
   // ---- 额部 ----
@@ -398,6 +404,69 @@ export const SITES = [
     risk: 'mid',
     note: '− 档位为咬肌萎缩后的内收；见效需 2–4 周',
   },
+
+  // ---- 耳部 ----
+  //
+  // ⚠️ 这是全部部位里可靠性最低的一组，三条限制必须让使用者知道：
+  //
+  //  1. 68 点在耳区【一个点都没有】。位置完全靠解剖比例外推：
+  //     耳上缘 ≈ 眉线、耳垂底 ≈ 鼻底（经典面部比例），横向以面宽为参考。
+  //     头发盖住耳朵时，外推点落在头发上，形变会连带拉扯发丝。
+  //
+  //  2. 正面照只能表达耳朵「外展多少」，无法表达颅耳角（耳朵立起来的角度）。
+  //     精灵耳的真实评估必须看侧面 / 45° 斜位。
+  //
+  //  3. 三角网格在耳区没有真实顶点（只有外缘锚点 72/75 在附近），
+  //     所以耳朵档位除了推动 68 点，还要额外推动外缘锚点 ——
+  //     见 earAnchorOffsets()。即便如此仍是整块拉伸，不是耳廓形变。
+  {
+    key: 'earBase',
+    zone: 'ear',
+    label: '耳基底',
+    pair: true,
+    virtual: true,
+    at: (c) => ({ u: 1.02 * c.uHalf, v: c.vEarTop + 0.45 * c.earLen }),
+    dir: { u: 1, v: 0 },
+    radius: 0.14,
+    scale: 0.2,
+    anchorScale: 0.34,
+    projects: ['玻尿酸填充（耳基底）'],
+    doseRef: '每侧 0.5–1.5 ml',
+    risk: 'mid',
+    note: '耳后颅耳沟处，俗称「精灵耳」：＋档位耳廓外展，正面露耳面积增大、脸视觉变窄；颅耳角需侧面照评估',
+  },
+  {
+    key: 'earHelix',
+    zone: 'ear',
+    label: '耳轮轮廓',
+    pair: true,
+    virtual: true,
+    at: (c) => ({ u: 1.22 * c.uHalf, v: c.vEarTop + 0.3 * c.earLen }),
+    dir: { u: 1, v: -0.3 },
+    radius: 0.11,
+    scale: 0.14,
+    anchorScale: 0.26,
+    projects: ['玻尿酸填充（耳廓支撑）', '手术（耳廓成形）'],
+    doseRef: '每侧 0.2–0.5 ml',
+    risk: 'mid',
+    note: '耳廓外缘弧度与外展度；明显形态异常以手术为主，注射仅能微调',
+  },
+  {
+    key: 'earLobe',
+    zone: 'ear',
+    label: '耳垂',
+    pair: true,
+    virtual: true,
+    at: (c) => ({ u: 1.1 * c.uHalf, v: c.vEarBottom - 0.1 * c.earLen }),
+    dir: { u: 0.3, v: 1 },
+    radius: 0.08,
+    scale: 0.1,
+    anchorScale: 0.16,
+    projects: ['玻尿酸填充'],
+    doseRef: '每侧 0.2–0.5 ml',
+    risk: 'low',
+    note: '耳垂饱满度；＋档位饱满外展，− 档位收紧贴附',
+  },
 ]
 
 // ---------------------------------------------------------------- 锚量上下文
@@ -447,7 +516,17 @@ export function zoneContext(points, opts = {}) {
   // 横向锚量取左右平均的绝对值：脸略有不对称时不至于把部位点推偏
   const symU = (a, b) => (Math.abs(U(a)) + Math.abs(U(b))) / 2
 
+  // 耳部纵向范围：经典面部比例 —— 耳上缘约与眉线齐平、耳垂底约与鼻底齐平。
+  // 68 点在耳区没有任何点，这两个锚量是耳部外推的唯一纵向依据。
+  const earLen = V(33) - vBrowTop // 眉线 → 鼻底
+  const vEarTop = vBrowTop - 0.04 * earLen // 耳上缘略高于眉线
+  const vEarBottom = V(33) + 0.06 * earLen // 耳垂略低于鼻底
+
   return {
+    // 耳部（68 点无覆盖，纯比例外推）
+    vEarTop,
+    vEarBottom,
+    earLen,
     // 纵向
     vBrowTop,
     vHairline,
@@ -593,6 +672,99 @@ export function applySiteOffsets(points, values, opts = {}) {
       if (wMax <= 0 || !dir) continue
       out[i].x += amp * wMax * dir.x
       out[i].y += amp * wMax * dir.y
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------- 耳部锚点推动
+
+/**
+ * 耳部档位对外围锚点的额外位移。
+ *
+ * ## 为什么需要单独一个函数
+ *
+ * `applySiteOffsets` 只对 68 点施加位移，而【耳区一个 68 点都没有】。
+ * 实测：耳轮外缘控制点距最近的关键点（0 / 16）约 0.14 倍面宽，
+ * 按 radius 0.11 算高斯权重只有 exp(−3×1.6²) ≈ 0.03 —— 拖满档几乎看不出变化。
+ *
+ * 耳朵要产生可见形变，只能推动离它最近的外缘锚点（72 右外 / 75 左外，
+ * 索引 4 与 7），让三角网格在耳朵高度真实外扩。锚点是网格边界，
+ * 它向外走 → 原本在网格外的耳周像素被纳入 → 照片上耳朵区域被向外拉伸。
+ *
+ * ## 为什么这里不用高斯衰减
+ *
+ * 一开始照搬了 applySiteOffsets 的高斯模型，结果实测满档只推动 0.9px：
+ * 外缘锚点距耳部控制点约 0.28 倍面宽，而 radius 只有 0.11~0.14 倍面宽，
+ * 权重被压到 exp(−3×2.5²) ≈ 1e−8，等于没推。
+ *
+ * 而且衰减在这里语义也不对：我们要的就是「在耳朵高度把边界向外推」，
+ * 被推动的对象只有 2 个锚点、本就位于耳朵高度，不需要按距离再衰减一次。
+ * 改成按档位直接给定位移量（anchorScale × 档位 × 面宽），量级可控且可测。
+ *
+ * ## 必须知道的两条副作用
+ *
+ * 1. 锚点是边界约束，推动它会连带耳后的头发 / 背景一起外扩 —— 2D 形变
+ *    没有耳朵蒙版，无法只动耳朵。
+ * 2. 这是「整块拉伸」，不是耳廓形态变化。真实精灵耳是耳朵绕耳根转出来，
+ *    耳朵本身不变大；这里做不到。
+ *
+ * @param {Point[]} points  原始 68 点
+ * @param {Point[]} anchors 已软跟随后的 8 个锚点
+ * @param {?Object} values  部位档位表
+ * @param {{hairlineY?:number, ctx?:Object}} opts
+ * @returns {Point[]} 叠加耳部位移后的锚点（新数组）
+ */
+export function earAnchorOffsets(points, anchors, values, opts = {}) {
+  if (!Array.isArray(anchors) || !values) return anchors
+  const earSites = SITES.filter((s) => s.zone === 'ear')
+  let any = false
+  for (const s of earSites) {
+    if (Number.isFinite(values[s.key]) && values[s.key] !== 0) {
+      any = true
+      break
+    }
+  }
+  if (!any) return anchors
+
+  const frame = frameOf(points)
+  const ctx = opts.ctx || zoneContext(points, opts)
+  const W = frame.valid ? frameFaceWidth(points, frame) : Math.abs(points[16].x - points[0].x)
+  if (!(W > 0)) return anchors
+
+  const anchorsRaw = siteAnchors(points, ctx, frame)
+  const out = anchors.map((p) => ({ x: p.x, y: p.y }))
+
+  for (const { site, pts, dirs } of anchorsRaw) {
+    if (site.zone !== 'ear') continue
+    const v = values[site.key]
+    if (!Number.isFinite(v) || v === 0) continue
+
+    // 满档（±100）位移量 = anchorScale × 面宽。实测 0.35 档满档约 5% 面宽，
+    // 既能看出耳朵外展，又不至于把边界推得把背景撕开。
+    const anchorScale = site.anchorScale ?? 0.3
+    const amp = (v / 100) * anchorScale * W
+
+    for (let a = 0; a < anchors.length; a++) {
+      // 只作用于外缘锚点（72 / 75）：顶部与底部锚点离耳朵太远，
+      // 推动它们会让整张脸外扩，而不是「耳朵外展」
+      if (a !== 4 && a !== 7) continue
+
+      // 方向取同侧控制点的 dir（控制点成对，取更近的那个）
+      const base = project(anchors[a], frame)
+      let dir = null
+      let best = Infinity
+      for (let k = 0; k < pts.length; k++) {
+        const cu = project(pts[k], frame)
+        const d = Math.abs(cu.u - base.u)
+        if (d < best) {
+          best = d
+          dir = dirs[k]
+        }
+      }
+      if (!dir) continue
+      out[a].x += amp * dir.x
+      out[a].y += amp * dir.y
     }
   }
   return out
