@@ -13,8 +13,11 @@
  * 高斯距离衰减跟随。镜像亚单位（如鼻翼）必须成对给反向权重，否则会拉垮
  * 权重 0.2 的对称分。
  *
- * ⚠️ 位移量一律按【面宽】归一（unit = |p16.x − p0.x|），跨分辨率结果一致。
+ * ⚠️ 位移量一律按【规范面宽】归一（沿基准水平轴的两颧距离，见 frame.js），
+ *    跨分辨率、跨姿态结果一致。
  */
+
+import { frameOf, frameFaceWidth } from './frame.js'
 
 // ---------------------------------------------------------------- 分区定义
 
@@ -401,7 +404,8 @@ export function activeCountOf(values) {
 }
 
 function faceUnitOf(pts) {
-  const w = Math.abs(pts[16].x - pts[0].x)
+  const f = frameOf(pts)
+  const w = f.valid ? frameFaceWidth(pts, f) : Math.abs(pts[16].x - pts[0].x)
   return w > 0 ? w : 1
 }
 

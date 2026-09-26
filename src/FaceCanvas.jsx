@@ -162,6 +162,66 @@ function drawHighlight(ctx, pts, indices, lw, k) {
   ctx.fill()
 }
 
+/**
+ * 基准点（两眼质心）：青色圆环 + 十字 + 连线 + 原点。
+ * 这两个点定义了整张脸的坐标系 —— 原点在两眼中点、单位是眼间距，
+ * 换任何一张脸定义都完全相同，所以画出来让用户看得见、抓得住。
+ */
+function drawFrameAnchors(ctx, anchors, lw, k, activeKey) {
+  if (!anchors || !anchors.L || !anchors.R) return
+  const r = Math.max(lw * 3, MARKER_PX.select * k)
+
+  ctx.save()
+  // 基准轴（两眼连线）：坐标系的 X 轴
+  ctx.setLineDash([lw * 5, lw * 4])
+  ctx.lineWidth = lw * 1.5
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.8)'
+  ctx.beginPath()
+  ctx.moveTo(anchors.L.x, anchors.L.y)
+  ctx.lineTo(anchors.R.x, anchors.R.y)
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  // 原点：两眼中点
+  const O = { x: (anchors.L.x + anchors.R.x) / 2, y: (anchors.L.y + anchors.R.y) / 2 }
+  const cross = r * 0.55
+  ctx.lineWidth = lw * 1.6
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.95)'
+  ctx.beginPath()
+  ctx.moveTo(O.x - cross, O.y)
+  ctx.lineTo(O.x + cross, O.y)
+  ctx.moveTo(O.x, O.y - cross)
+  ctx.lineTo(O.x, O.y + cross)
+  ctx.stroke()
+
+  const font = Math.max(9, Math.round(MARKER_PX.font * k * 0.95))
+  ctx.font = `700 ${font}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  for (const key of ['L', 'R']) {
+    const a = anchors[key]
+    const on = activeKey === key
+    ctx.lineWidth = lw * 2
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.8)'
+    ctx.fillStyle = on ? 'rgba(34, 211, 238, 0.95)' : 'rgba(34, 211, 238, 0.4)'
+    ctx.beginPath()
+    ctx.arc(a.x, a.y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.lineWidth = lw * 2.6
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)'
+    ctx.fillStyle = '#e2f9ff'
+    ctx.font = `700 ${font}px system-ui, sans-serif`
+    // 标注按「画面上的左右」，用户看到哪边就是哪边，不引入解剖学左右
+    const label = key === 'L' ? '左' : '右'
+    ctx.fillText(label, a.x, a.y + 0.5)
+    ctx.strokeText(label, a.x, a.y + 0.5)
+  }
+  ctx.restore()
+}
+
 /** 淡底圆点：三庭 / 对称模式下没有点位图层，仍给出可抓目标 */
 function drawFaintPoints(ctx, pts, k, count = 68) {
   const r = Math.max(1.2, MARKER_PX.faint * k)
@@ -368,6 +428,14 @@ export default function FaceCanvas({
   showWarp,
   /** 需要高亮显示的点位索引（悬停亚单位行时给出），null 表示无 */
   highlight = null,
+  /** 基准点 {L, R}：整张脸的坐标原点与尺度基准，可拖动校准 */
+  frameAnchors = null,
+  /** 是否绘制并可抓取基准点 */
+  showAnchors = false,
+  onAnchorDrag,
+  onAnchorSelect,
+  /** 当前选中的基准点 'L' | 'R' | null */
+  activeAnchor = null,
   maxEdge = MAX_EDGE,
   emptyTitle = EMPTY.title,
   emptyHint = EMPTY.hint,
@@ -476,6 +544,7 @@ export default function FaceCanvas({
       }
       drawCustomPoints(mctx, points, customCount, selectedPoint, lw, k)
       drawHighlight(mctx, points, highlight, lw, k)
+      if (showAnchors && frameAnchors) drawFrameAnchors(mctx, frameAnchors, lw, k, activeAnchor)
       const hov = hoverRef.current
       if (hov >= 0 && hov !== selectedPoint && hov < points.length) {
         drawHover(mctx, points, hov, lw, k)
@@ -523,6 +592,9 @@ export default function FaceCanvas({
     triangles,
     customCount,
     highlight,
+    frameAnchors,
+    showAnchors,
+    activeAnchor,
   ])
 
   // ---------------------------------------------------------------- 点位拖拽
@@ -549,12 +621,29 @@ export default function FaceCanvas({
    * 跟着缩小；同时对超小图保留 2% 图宽的相对下限，避免整图只有一个命中区。
    */
   const hitTest = (p) => {
-    if (!p || !points) return -1
+    if (!p || !points) return null
     const img = imgRef.current
     const w = img?.naturalWidth || img?.width || 1
     const dispW = wrapRef.current?.getBoundingClientRect().width || 0
     const k = dispW > 0 ? w / dispW : 1
     const hitR = Math.max(w * 0.02, MARKER_PX.hit * k)
+
+    // 基准点优先：它是整张脸的坐标原点，比单个关键点更该被抓到
+    if (showAnchors && frameAnchors) {
+      let bestA = null
+      let bestAD = Infinity
+      for (const key of ['L', 'R']) {
+        const a = frameAnchors[key]
+        if (!a) continue
+        const d = Math.hypot(a.x - p.x, a.y - p.y)
+        if (d < bestAD) {
+          bestAD = d
+          bestA = key
+        }
+      }
+      if (bestA && bestAD <= hitR * 1.15) return { kind: 'anchor', id: bestA }
+    }
+
     let best = -1
     let bestD = Infinity
     for (let i = 0; i < points.length; i++) {
@@ -565,7 +654,7 @@ export default function FaceCanvas({
         best = i
       }
     }
-    return bestD > hitR ? -1 : best
+    return bestD > hitR ? null : { kind: 'point', id: best }
   }
 
   const onPointerDown = (e) => {
@@ -578,19 +667,20 @@ export default function FaceCanvas({
     const active = document.activeElement
     if (active && active !== document.body && typeof active.blur === 'function') active.blur()
 
-    const idx = hitTest(p)
+    const hit = hitTest(p)
 
     // 加点模式：点在空白处则新建控制点；命中已有点则照常拖动
-    if (addMode && idx < 0) {
+    if (addMode && !hit) {
       e.preventDefault()
       onAddPoint?.(p.x, p.y)
       return
     }
-    if (idx < 0) return
+    if (!hit) return
     e.preventDefault()
-    dragRef.current = { index: idx, lastX: p.x, lastY: p.y }
+    dragRef.current = { kind: hit.kind, id: hit.id, lastX: p.x, lastY: p.y }
     e.currentTarget.style.cursor = 'grabbing'
-    onPointSelect?.(idx)
+    if (hit.kind === 'anchor') onAnchorSelect?.(hit.id)
+    else onPointSelect?.(hit.id)
   }
 
   const onPointerMove = (e) => {
@@ -604,16 +694,21 @@ export default function FaceCanvas({
       const dy = p.y - d.lastY
       d.lastX = p.x
       d.lastY = p.y
-      if (dx || dy) onPointDrag?.(d.index, dx, dy)
+      if (dx || dy) {
+        if (d.kind === 'anchor') onAnchorDrag?.(d.id, dx, dy)
+        else onPointDrag?.(d.id, dx, dy)
+      }
       return
     }
-    const idx = hitTest(p)
-    const hit = idx >= 0
-    e.currentTarget.style.cursor = addMode ? (hit ? 'grab' : 'crosshair') : hit ? 'grab' : 'default'
+    const hit = hitTest(p)
+    const has = !!hit
+    e.currentTarget.style.cursor = addMode ? (has ? 'grab' : 'crosshair') : has ? 'grab' : 'default'
 
     // hover 变化才重绘：仅更新 ref + 走 rAF，不触发 React 渲染
-    if (idx !== hoverRef.current) {
-      hoverRef.current = idx
+    // 基准点 hover 用负码记录（-2 = L，-3 = R），与点位索引互不冲突
+    const hovCode = !hit ? -1 : hit.kind === 'anchor' ? (hit.id === 'L' ? -2 : -3) : hit.id
+    if (hovCode !== hoverRef.current) {
+      hoverRef.current = hovCode
       scheduleRef.current()
     }
   }

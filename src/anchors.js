@@ -15,6 +15,8 @@
  * ⚠️ 本文件被 scripts/gen-triangles.mjs 直接 import，两份公式必须同源。
  */
 
+import { frameOf, frameFaceWidth, alongY } from './frame.js'
+
 /** 锚点数量 */
 export const ANCHOR_COUNT = 8
 
@@ -30,13 +32,18 @@ export const FULL_COUNT = 68 + ANCHOR_COUNT
  * @returns {Point[]} 8 个锚点，顺序固定
  */
 export function buildAnchors(pts) {
-  const cx = (pts[0].x + pts[16].x) / 2
-  const halfW = Math.abs(pts[16].x - pts[0].x) / 2
+  // 一律走基准坐标系：脸歪时锚点框仍与脸对齐，不会歪成平行四边形
+  const frame = frameOf(pts)
+  const cx = frame.O.x
+  const halfW = (frame.valid ? frameFaceWidth(pts, frame) : Math.abs(pts[16].x - pts[0].x)) / 2
 
-  let browTop = Infinity
-  for (let i = 17; i <= 26; i++) browTop = Math.min(browTop, pts[i].y)
+  // 沿基准垂直轴取最靠上的眉点，再换算回图像 y（锚点最终要落回图像坐标）
+  let browV = Infinity
+  for (let i = 17; i <= 26; i++) browV = Math.min(browV, alongY(frame.O, pts[i], frame))
+  const browPt = { x: frame.O.x + browV * frame.Y.x, y: frame.O.y + browV * frame.Y.y }
+  const browTop = browPt.y
   const chinY = pts[8].y
-  const H = chinY - browTop // 眉线→下巴，近似中庭+下庭高度
+  const H = alongY(browPt, pts[8], frame) // 眉线→下巴（沿脸纵轴，非图像纵向）
 
   // 顺时针：左上 → 顶 → 右上 → 右外 → 右下 → 左下 → 左外
   // 顶部抬到眉线上方 0.75H，足以覆盖发际线与部分头发

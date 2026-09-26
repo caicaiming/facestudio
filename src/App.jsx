@@ -18,6 +18,13 @@ import { buildFullPoints, displaceAnchors, displaceByIDW } from './anchors.js'
 import { estimateHairline } from './hairline.js'
 import { analyzeFace, SLIDERS, DEFAULT_PARAMS } from './analyze.js'
 import { autoTune, POINT_MOVES, MIRROR_KEY } from './autoTune.js'
+import {
+  buildFrame,
+  eyeCenters,
+  calibrateTransform,
+  applyTransform,
+  frameDiagnostics,
+} from './frame.js'
 import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
@@ -122,6 +129,11 @@ export default function App() {
   const [phase, setPhase] = useState('loading-model')
   const [imageSrc, setImageSrc] = useState(null)
   const [points, setPoints] = useState(null)
+  /** 检测器原始点位：基准点校准的还原基准，重置时回到这里 */
+  const [rawPoints, setRawPoints] = useState(null)
+  /** 是否在主图上绘制并可抓取基准点 */
+  const [showAnchors, setShowAnchors] = useState(true)
+  const [activeAnchor, setActiveAnchor] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [params, setParams] = useState(DEFAULT_PARAMS)
   // 68 个关键点的逐点位移（自然像素），与 5 路预设滑块相互独立
@@ -200,6 +212,7 @@ export default function App() {
 
         if (!det) {
           setImageSrc(url)
+          setRawPoints(null)
           setPoints(null)
           setMetrics(null)
           setPhase('error')
@@ -210,6 +223,7 @@ export default function App() {
         const pts = det.landmarks.positions.map((p) => ({ x: p.x, y: p.y }))
         if (pts.length !== 68) {
           setImageSrc(url)
+          setRawPoints(null)
           setPoints(null)
           setMetrics(null)
           setPhase('error')
@@ -236,7 +250,9 @@ export default function App() {
           hairlineY,
         })
         setImageSrc(url)
+        setRawPoints(pts)
         setPoints(pts)
+        setActiveAnchor(null)
         setMetrics(m)
         setParams(DEFAULT_PARAMS)
         setPointOffsets(emptyOffsets())
@@ -252,6 +268,7 @@ export default function App() {
         setPhase('done')
       } catch {
         setImageSrc(url)
+        setRawPoints(null)
         setPoints(null)
         setMetrics(null)
         setPhase('error')
@@ -277,6 +294,64 @@ export default function App() {
   }, [points, customPoints])
 
   const anchors = useMemo(() => (srcFull ? srcFull.slice(68, 76) : null), [srcFull])
+
+  // ---- 基准坐标系 ----
+  // 原点 = 两眼质心中点，单位 = 眼间距。这套定义与照片无关：
+  // 换任何一张脸，原点都在同一个解剖位置、一个单位都是同一个眼间距。
+  const frame = useMemo(() => (points ? buildFrame(points) : null), [points])
+  const frameAnchors = useMemo(() => (points ? eyeCenters(points) : null), [points])
+  /** 相对自动检测的平移量（像素）：判断用户有没有动过基准点 */
+  const calibShift = useMemo(() => {
+    if (!rawPoints || !points) return 0
+    const a = eyeCenters(rawPoints)
+    const c = eyeCenters(points)
+    if (!a.L || !c.L) return 0
+    return Math.hypot(c.L.x - a.L.x, c.L.y - a.L.y)
+  }, [rawPoints, points])
+  const frameDiag = useMemo(
+    () => (frame ? frameDiagnostics(frame, { shift: calibShift }) : null),
+    [frame, calibShift],
+  )
+  const isCalibrated = frameDiag?.calibrated ?? false
+
+  /**
+   * 拖动基准点：整组点位【纯平移】跟随。
+   *
+   * 这里刻意不做相似变换 —— 单点微动会同时改变两眼连线的角度与长度，
+   * 实测拖 50px 就能让脸旋转 14°、眼间距缩水 10%，既不可预测也不符合
+   * 「微调基准点」的直觉。检测器最常见的误差就是整体偏移，纯平移正好对症，
+   * 且 roll / 眼间距保持恒定，诊断不会跳变。
+   * 姿态与尺度由基准坐标系在测量时自动归一，不需要用户手动摆。
+   */
+  const dragAnchor = useCallback((which, dx, dy) => {
+    setPoints((cur) => {
+      if (!cur) return cur
+      return cur.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+    })
+  }, [])
+
+  /** 旋转摆正：把整组点绕原点转到两眼连线水平（roll = 0） */
+  const levelFace = useCallback(() => {
+    setPoints((cur) => {
+      if (!cur || !frame) return cur
+      const a = (-frame.roll * Math.PI) / 180
+      const cos = Math.cos(a)
+      const sin = Math.sin(a)
+      const { x: ox, y: oy } = frame.O
+      return cur.map((p) => {
+        const dx = p.x - ox
+        const dy = p.y - oy
+        return { x: ox + dx * cos - dy * sin, y: oy + dx * sin + dy * cos }
+      })
+    })
+  }, [frame])
+
+  /** 放弃校准，回到检测器原始点位 */
+  const resetCalibration = useCallback(() => {
+    if (!rawPoints) return
+    setPoints(rawPoints)
+    setActiveAnchor(null)
+  }, [rawPoints])
 
   // 三角剖分：无自定义点时沿用构建期固化的表；加了点则按新点集重算一次。
   // 只在加/删自定义点时触发，不进入拖动时的每帧路径。
@@ -672,8 +747,66 @@ export default function App() {
       <main className="layout">
         {/* ---------------- 左栏：参数滑块 ---------------- */}
         <aside className="col-left card">
+          {/* ---------------- 基准点校准（决定全部点位的第一层） ---------------- */}
+          <h2 className="card-title">基准点校准</h2>
+          <div className="frame-block">
+            <p className="frame-desc">
+              整张脸的坐标系由<strong>两个基准点</strong>决定：原点在两眼中点，
+              单位是眼间距。<strong>换任何一张脸都是同一套定义</strong>，
+              所以测量结果跨照片可比。点位若整体偏移，拖动基准点即可整组校正。
+            </p>
+            {frameDiag ? (
+              <div className={`frame-diag ${frameDiag.level}`}>
+                <div className="frame-stats">
+                  <span>
+                    歪头 <b>{frameDiag.roll.toFixed(1)}°</b>
+                  </span>
+                  <span>
+                    眼间距 <b>{Math.round(frameDiag.ipd)}</b> px
+                  </span>
+                  {isCalibrated && (
+                    <span>
+                      已校准 位移 <b>{Math.round(frameDiag.shift)}</b> px
+                    </span>
+                  )}
+                </div>
+                <p className="frame-text">{frameDiag.text}</p>
+              </div>
+            ) : (
+              <p className="note">上传照片后显示基准诊断。</p>
+            )}
+            <div className="frame-actions">
+              <button
+                className={`btn-ghost sm${showAnchors ? ' active' : ''}`}
+                disabled={!points}
+                onClick={() => setShowAnchors((v) => !v)}
+              >
+                {showAnchors ? '隐藏基准点' : '显示基准点'}
+              </button>
+              <button
+                className="btn-ghost sm"
+                disabled={!points || !frame || Math.abs(frame.roll) < 0.5}
+                onClick={levelFace}
+                title="绕两眼中点旋转，直到两眼连线水平"
+              >
+                摆正至水平
+              </button>
+              <button
+                className="btn-ghost sm"
+                disabled={!points || !isCalibrated}
+                onClick={resetCalibration}
+              >
+                还原自动检测
+              </button>
+            </div>
+            <p className="frame-hint">
+              青色圆环即基准点（画面左 / 右眼质心），可直接拖动；
+              整组 68 点会按平移 + 旋转 + 缩放同步校正。
+            </p>
+          </div>
+
           {/* ---------------- 自定义控制点 ---------------- */}
-          <h2 className="card-title">自定义控制点</h2>
+          <h2 className="card-title sub">自定义控制点</h2>
           <div className="custom-bar">
             <button
               className={`btn-ghost sm${addMode ? ' active' : ''}`}
@@ -1012,6 +1145,11 @@ export default function App() {
                 onAddPoint={addCustomPoint}
                 showWarp={false}
                 highlight={highlight}
+                frameAnchors={frameAnchors}
+                showAnchors={showAnchors && view !== 'reference'}
+                onAnchorDrag={dragAnchor}
+                onAnchorSelect={setActiveAnchor}
+                activeAnchor={activeAnchor}
               />
             </div>
 

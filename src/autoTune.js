@@ -33,6 +33,7 @@ import {
   LEFT_HALF,
   RIGHT_HALF,
 } from './measure.js'
+import { frameOf, frameFaceWidth } from './frame.js'
 
 /** 单次评估约 0.2ms，但组合搜索会跑上千次，留一道上限防止退化输入下卡死 */
 const MAX_EVALS = 8000
@@ -71,7 +72,8 @@ const clampRange = (v, min, max) => (v < min ? min : v > max ? max : v)
  * measureFace 里 W = |points[16].x - points[0].x|
  */
 function faceUnitOf(points) {
-  const w = Math.abs(points[16].x - points[0].x)
+  const f = frameOf(points)
+  const w = f.valid ? frameFaceWidth(points, f) : Math.abs(points[16].x - points[0].x)
   return w > 0 ? w : 1
 }
 

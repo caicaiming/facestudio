@@ -39,7 +39,7 @@ npm test             # 纯函数层单元测试
 | 照片形变 | 三角形仿射纹理映射（`warp.js`）：142 块源纹理预缓存，运行期仅 `setTransform + drawImage`，整脸绘制 <2ms，拖动实时 |
 | 网格覆盖 | 68 关键点 + 8 外围锚点（`anchors.js`）共 76 点剖分，网格顶边从眉线扩展到额头上方，额头滑块可作用于照片；锚点软跟随（反距离加权）抑制大形变时的侧面纹理撕裂 |
 | 三角剖分 | 构建期由 `scripts/gen-triangles.mjs` 预计算固化为 `src/triangles.js`（142 个三角形）；启用自定义控制点后由 `delaunay.js` 运行时重算 |
-| 纯函数层 | `measure.js` / `analyze.js` / `autoTune.js` / `subunits.js` 零 React 依赖，可 `node --test` 单测 |
+| 纯函数层 | `measure.js` / `analyze.js` / `autoTune.js` / `subunits.js` / `frame.js` 零 React 依赖，可 `node --test` 单测 |
 
 重新生成三角剖分表：
 

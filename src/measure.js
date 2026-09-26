@@ -10,6 +10,8 @@
  * 坐标一律为【图片自然像素坐标】。
  */
 
+import { buildFrame, alongX, alongY, frameFaceWidth, frameAxis, project } from './frame.js'
+
 // ---------------------------------------------------------------- 索引常量
 
 /** 中轴点，共 10 个，不参与对称计算 */
@@ -143,20 +145,28 @@ export function measureFace(
 ) {
   if (!isValidPoints(points)) return emptyMetrics('INVALID_LANDMARKS')
 
-  const W = Math.abs(points[16].x - points[0].x)
+  // ---- 基准坐标系（两眼中点 + 眼间距，见 frame.js）----
+  // 之后所有距离一律沿基准轴投影，而非图像 x / y 轴差值：
+  // 脸歪时图像轴投影会失真，基准轴投影不会。
+  const frame = buildFrame(points)
+  const W = frame.valid ? frameFaceWidth(points, frame) : Math.abs(points[16].x - points[0].x)
   if (!(W > 0)) return emptyMetrics('INVALID_LANDMARKS')
 
   // ---- 发际线估算（三级方案，见文档 6.1.2）----
   // 1) 图像实测：沿眉心中线扫描皮肤→头发的分界（hairline.js）
   // 2) 检测器框顶：TinyFaceDetector 框通常紧贴眉线，仅作参考
   // 3) 几何兜底：眉上缘 - 5.5 × 平均眼裂高度（与中庭/下庭相互独立，保证指标有分辨力）
+  // 沿基准垂直轴取「最靠上」的眉点，而非图像 y 最小 —— 脸歪时两者不同
   let browTopY = Infinity
-  for (let i = 17; i <= 26; i++) browTopY = Math.min(browTopY, points[i].y)
+  for (let i = 17; i <= 26; i++) {
+    const v = alongY(points[27], points[i], frame)
+    browTopY = Math.min(browTopY, points[27].y + v)
+  }
   const eyeOpening =
-    (Math.abs(points[41].y - points[37].y) +
-      Math.abs(points[40].y - points[38].y) +
-      Math.abs(points[47].y - points[43].y) +
-      Math.abs(points[46].y - points[44].y)) /
+    (Math.abs(alongY(points[37], points[41], frame)) +
+      Math.abs(alongY(points[38], points[40], frame)) +
+      Math.abs(alongY(points[43], points[47], frame)) +
+      Math.abs(alongY(points[44], points[46], frame))) /
     4
 
   const estimated = true // 三种方案均为估算
@@ -169,25 +179,27 @@ export function measureFace(
     faceTop = browTopY - 5.5 * eyeOpening
   }
 
-  const faceBottom = points[8].y
-  const faceHeight = faceBottom - faceTop
+  // faceTop 是一个 y 值（发际线扫描结果）。沿基准垂直轴把它变成一个点再测距，
+  // 这样脸歪时「上庭长度」仍等于沿脸纵轴的距离，而不是图像纵向的投影。
+  const faceTopPt = { x: points[27].x, y: faceTop }
+  const faceHeight = alongY(faceTopPt, points[8], frame)
   if (!(faceHeight > 0)) return emptyMetrics('INVALID_LANDMARKS')
 
-  // ---- 三庭 ----
+  // ---- 三庭（沿基准垂直轴）----
   const three = {
-    upper: (points[27].y - faceTop) / faceHeight,
-    middle: (points[33].y - points[27].y) / faceHeight,
-    lower: (points[8].y - points[33].y) / faceHeight,
+    upper: alongY(faceTopPt, points[27], frame) / faceHeight,
+    middle: alongY(points[27], points[33], frame) / faceHeight,
+    lower: alongY(points[33], points[8], frame) / faceHeight,
     estimated,
   }
 
-  // ---- 五眼 ----
+  // ---- 五眼（沿基准水平轴）----
   const segments = [
-    Math.abs(points[36].x - points[0].x), // 右耳根 → 右眼外眦
-    Math.abs(points[39].x - points[36].x), // 右眼宽
-    Math.abs(points[42].x - points[39].x), // 两眼间距（内眦 → 内眦）
-    Math.abs(points[45].x - points[42].x), // 左眼宽
-    Math.abs(points[16].x - points[45].x), // 左眼外眦 → 左耳根
+    Math.abs(alongX(points[0], points[36], frame)), // 右耳根 → 右眼外眦
+    Math.abs(alongX(points[36], points[39], frame)), // 右眼宽
+    Math.abs(alongX(points[39], points[42], frame)), // 两眼间距（内眦 → 内眦）
+    Math.abs(alongX(points[42], points[45], frame)), // 左眼宽
+    Math.abs(alongX(points[45], points[16], frame)), // 左眼外眦 → 左耳根
   ]
   const ratios = segments.map((s) => s / W)
   const five = {
@@ -196,8 +208,10 @@ export function measureFace(
     deviation: ratios.reduce((a, r) => a + Math.abs(r - IDEAL.fiveSeg), 0) / 5,
   }
 
-  // ---- 对称（以面宽归一化，跨分辨率可比）----
-  const axis = fitLine([points[8], points[27], points[30]])
+  // ---- 对称（以规范面宽归一化，跨分辨率可比）----
+  // 中轴改用过原点、方向为基准垂直轴的直线：与水平轴严格正交，
+  // 且不受 8/27/30 三点抖动影响（旧版用这三点拟合，鼻梁一歪轴就歪）。
+  const axis = frame.valid ? frameAxis(frame) : fitLine([points[8], points[27], points[30]])
   let symSum = 0
   for (let i = 0; i < RIGHT_HALF.length; i++) {
     const m = mirrorPoint(points[RIGHT_HALF[i]], axis)
@@ -205,21 +219,25 @@ export function measureFace(
   }
   const symmetry = (symSum / RIGHT_HALF.length / W) * 100
 
-  // ---- 黄金分割 ----
-  const midLen = points[33].y - points[27].y
-  const lowLen = points[8].y - points[33].y
+  // ---- 黄金分割（沿基准垂直轴）----
+  const midLen = alongY(points[27], points[33], frame)
+  const lowLen = alongY(points[33], points[8], frame)
   const golden = lowLen > 0 ? midLen / lowLen : null
 
-  // ---- 视觉重心 ----
-  const featureY =
-    (points[27].y + points[30].y + points[33].y + points[51].y + points[57].y) / 5
-  const balance = (featureY - faceTop) / faceHeight
+  // ---- 视觉重心（沿基准垂直轴，faceHeight 同量纲）----
+  const featureV =
+    [27, 30, 33, 51, 57].reduce((a, i) => a + alongY(faceTopPt, points[i], frame), 0) / 5
+  const balance = featureV / faceHeight
 
   // ---- 焦距（仅信息提示，不参与评分）----
   const focal = (imageW * 0.9) / (2 * Math.tan((35 * Math.PI) / 180))
 
-  // ---- 偏航角代理值 ----
-  const yaw = Math.abs(points[30].x - (points[0].x + points[16].x) / 2) / W
+  // ---- 偏航角代理值：鼻尖偏离面宽中点的横向距离 / 面宽 ----
+  const faceMid = {
+    x: (points[0].x + points[16].x) / 2,
+    y: (points[0].y + points[16].y) / 2,
+  }
+  const yaw = Math.abs(alongX(faceMid, points[30], frame)) / W
 
   return {
     three,
@@ -233,6 +251,8 @@ export function measureFace(
     // 绘制辅助字段（供 FaceCanvas 画三庭分界线）
     faceTop,
     faceHeight,
+    // 基准坐标系诊断（供 UI 显示姿态 / 校准状态）
+    frame,
     valid: Number.isFinite(golden) && Number.isFinite(symmetry),
     reason: null,
   }
