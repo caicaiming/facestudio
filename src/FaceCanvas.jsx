@@ -129,6 +129,61 @@ function drawPoints(ctx, pts, lw, k) {
 }
 
 /**
+ * 医美部位作用点。
+ *
+ * 与亚单位高亮的区别：亚单位高亮的是 68 点里的真实关键点，而医美部位
+ * （额头 / 太阳穴 / 苹果肌 / 泪沟…）在 68 点里【不存在】，是规范坐标系外推
+ * 出来的虚拟控制点。必须单独画出来，否则使用者看不到调整作用在哪。
+ *
+ * 语义：on = 该部位当前有档位（实心大点）；active = 鼠标悬停（外圈 + 标签）。
+ */
+function drawSiteMarkers(ctx, markers, lw, k) {
+  if (!markers || markers.length === 0) return
+  const rOn = Math.max(lw * 3.4, MARKER_PX.point * k * 1.5)
+  const rOff = Math.max(lw * 2.2, MARKER_PX.point * k * 0.9)
+
+  for (const m of markers) {
+    for (const p of m.pts) {
+      const r = m.on ? rOn : rOff
+      if (m.on) {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.85)'
+        ctx.fill()
+        ctx.lineWidth = Math.max(1, 1.4 * k)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
+        ctx.stroke()
+      } else {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.28)'
+        ctx.fill()
+      }
+      if (m.active) {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, r * 2.1, 0, Math.PI * 2)
+        ctx.lineWidth = Math.max(1, 1.8 * k)
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.95)'
+        ctx.stroke()
+      }
+    }
+    if (m.active && m.pts.length) {
+      const p = m.pts[0]
+      const fs = Math.max(11, lw * 7)
+      ctx.font = `${fs}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
+      ctx.lineWidth = Math.max(2, fs / 4)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
+      ctx.fillStyle = '#1d4ed8'
+      const y = p.y - (m.on ? rOn : rOff) * 2.2
+      ctx.strokeText(m.label, p.x, y)
+      ctx.fillText(m.label, p.x, y)
+    }
+  }
+}
+
+/**
  * 亚单位高亮：给指定点位画琥珀色光环 + 连线，指示该亚单位覆盖了哪些关键点。
  * 只在悬停亚单位行时出现，不参与命中判定。
  */
@@ -428,6 +483,8 @@ export default function FaceCanvas({
   showWarp,
   /** 需要高亮显示的点位索引（悬停亚单位行时给出），null 表示无 */
   highlight = null,
+  /** 医美部位作用点（虚拟控制点，不在 68 点内）：[{key,label,pts,active,on}] */
+  siteMarkers = null,
   /** 基准点 {L, R}：整张脸的坐标原点与尺度基准，可拖动校准 */
   frameAnchors = null,
   /** 是否绘制并可抓取基准点 */
@@ -543,6 +600,7 @@ export default function FaceCanvas({
         drawFaintPoints(mctx, points, k)
       }
       drawCustomPoints(mctx, points, customCount, selectedPoint, lw, k)
+      drawSiteMarkers(mctx, siteMarkers, lw, k)
       drawHighlight(mctx, points, highlight, lw, k)
       if (showAnchors && frameAnchors) drawFrameAnchors(mctx, frameAnchors, lw, k, activeAnchor)
       const hov = hoverRef.current
@@ -592,6 +650,7 @@ export default function FaceCanvas({
     triangles,
     customCount,
     highlight,
+    siteMarkers,
     frameAnchors,
     showAnchors,
     activeAnchor,

@@ -29,6 +29,10 @@ import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
 import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
+import { applySiteOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
+import { buildPlan, mmScale } from './aesthetic.js'
+import ZonePanel from './ZonePanel.jsx'
+import PlanPanel from './PlanPanel.jsx'
 
 /** 自定义控制点位移范围（图片自然像素） */
 const CUSTOM_OFFSET_RANGE = 60
@@ -140,8 +144,15 @@ export default function App() {
   const [pointOffsets, setPointOffsets] = useState(emptyOffsets)
   // 面部亚单位档位（−15…＋15），按美学分区的局部精细形变，独立于滑块与逐点位移
   const [subunitValues, setSubunitValues] = useState(emptySubunits)
+  // 医美部位档位（−15…＋15）：＋ 填充 / 外扩，− 收紧 / 内收
+  const [siteValues, setSiteValues] = useState(emptySites)
+  // 毫米标定：瞳距参考值取性别均值，用于把档位换算成医美沟通用的 mm
+  const [gender, setGender] = useState(null)
+  const [ipdMm, setIpdMm] = useState(null)
   // 主图上高亮显示的点位（悬停亚单位行时给出），仅作视觉指示
   const [highlight, setHighlight] = useState(null)
+  // 悬停医美部位时高亮该部位的作用点（虚拟控制点，不在 68 点内）
+  const [highlightSite, setHighlightSite] = useState(null)
   const [selectedPoint, setSelectedPoint] = useState(null)
   const [groupKey, setGroupKey] = useState('all')
   const [view, setView] = useState('detection')
@@ -366,9 +377,15 @@ export default function App() {
    */
   const previewPoints = useMemo(() => {
     if (!points) return null
-    // 形变三层叠加：5 路预设滑块 → 亚单位局部形变 → 逐点手动位移
+    // 形变四层叠加：5 路预设滑块 → 亚单位局部形变 → 医美部位形变 → 逐点手动位移
+    // 医美部位作用在【虚拟控制点】上（额头/太阳穴/苹果肌等 68 点未覆盖处），
+    // 位置由规范坐标系外推，故换任何一张脸都落在同一解剖位置。
     const d = applyPointOffsets(
-      applySubunitOffsets(getDeformedPoints(points, params), subunitValues),
+      applySiteOffsets(
+        applySubunitOffsets(getDeformedPoints(points, params), subunitValues),
+        siteValues,
+        { hairlineY: base?.hairlineY },
+      ),
       pointOffsets,
     )
     // 锚点软跟随：减小大形变时侧面三角形的剪切，避免发丝纹理拉成条纹
@@ -382,7 +399,7 @@ export default function App() {
       d,
     ).map((p, i) => ({ x: p.x + customPoints[i].dx, y: p.y + customPoints[i].dy }))
     return d.concat(anchorsD, customD)
-  }, [points, params, subunitValues, pointOffsets, customPoints, anchors])
+  }, [points, params, subunitValues, siteValues, pointOffsets, customPoints, anchors, base])
 
   /**
    * 主图点集：主图始终显示原图照片，叠加层必须与照片同坐标系，否则点位会浮在
@@ -573,6 +590,61 @@ export default function App() {
     })
   }, [])
 
+  /**
+   * 导出术前 / 术后对比图。
+   *
+   * 医美咨询最核心的交付物就是这张对比图 —— 顾客看方案文本没感觉，
+   * 看图才有。左取主图的原始照片，右取预览区的形变画布，拼成一张 PNG。
+   *
+   * 直接读 DOM 里的 <img> 与 <canvas>：两者都已加载完成，
+   * 不必再走一遍绘制管线，也避免引入额外的截图依赖。
+   */
+  const exportComparison = useCallback(() => {
+    const wraps = document.querySelectorAll('.canvas-duo .canvas-wrap')
+    if (wraps.length < 2) return false
+    const img = wraps[0]?.querySelector('img')
+    const warp = wraps[1]?.querySelector('canvas.warp')
+    const w = img?.naturalWidth || 0
+    const h = img?.naturalHeight || 0
+    if (!w || !h || !warp || !warp.width) return false
+
+    const gap = Math.round(w * 0.03)
+    const out = document.createElement('canvas')
+    out.width = w * 2 + gap
+    out.height = h
+    const ctx = out.getContext('2d')
+
+    ctx.fillStyle = '#0b0b0f'
+    ctx.fillRect(0, 0, out.width, out.height)
+    // warp 画布按 maxEdge 缩放过，drawImage 时统一拉回原图尺寸
+    ctx.drawImage(img, 0, 0, w, h)
+    ctx.drawImage(warp, w + gap, 0, w, h)
+
+    const fs = Math.max(14, Math.round(h * 0.035))
+    ctx.font = `600 ${fs}px system-ui, "Microsoft YaHei", sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    const labels = [
+      ['调整前', 0],
+      ['调整后（模拟）', w + gap],
+    ]
+    for (const [text, x] of labels) {
+      const tw = ctx.measureText(text).width
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
+      ctx.fillRect(x + w / 2 - tw / 2 - fs * 0.4, fs * 0.4, tw + fs * 0.8, fs * 1.6)
+      ctx.fillStyle = '#fff'
+      ctx.fillText(text, x + w / 2, fs * 0.6)
+    }
+
+    const a = document.createElement('a')
+    a.href = out.toDataURL('image/png')
+    a.download = `面部对比_${new Date().toISOString().slice(0, 10)}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return true
+  }, [])
+
   const clearCustomPoints = useCallback(() => {
     setCustomPoints([])
     setAddMode(false)
@@ -597,6 +669,33 @@ export default function App() {
     () => (adjustedMetrics && adjustedMetrics.valid ? analyzeFace(adjustedMetrics).score : null),
     [adjustedMetrics],
   )
+
+  // ---- 毫米标定：把归一化比例换算成医美沟通用的 mm ----
+  // 瞳距是稳定的天然标尺（成年女性约 62mm、男性约 64mm），误差约 ±5%。
+  const scale = useMemo(
+    () => (points ? mmScale(points, { ipdMm, gender, faceHeightPx: metrics?.faceHeight }) : null),
+    [points, ipdMm, gender, metrics],
+  )
+
+  // 部位档位同样降为低优先级更新，与右栏保持一致的响应节奏
+  const deferredSiteValues = useDeferredValue(siteValues)
+
+  // ---- 医美部位的作用点（供主图叠加层绘制）----
+  // 只在有部位被调整或悬停时计算，避免每次渲染都跑一遍外推。
+  const siteMarkers = useMemo(() => {
+    if (!points) return null
+    const hasActive = Object.values(deferredSiteValues || {}).some(
+      (v) => Number.isFinite(v) && v !== 0,
+    )
+    if (!hasActive && !highlightSite) return null
+    return siteAnchors(points, null).map((a) => ({
+      key: a.site.key,
+      label: a.site.label,
+      pts: a.pts,
+      active: highlightSite === a.site.key,
+      on: hasActive && Number.isFinite(deferredSiteValues[a.site.key]) && deferredSiteValues[a.site.key] !== 0,
+    }))
+  }, [points, deferredSiteValues, highlightSite])
 
   const adjustedCount = useMemo(
     () => pointOffsets.reduce((n, o) => n + (o && (o.dx || o.dy) ? 1 : 0), 0),
@@ -650,6 +749,25 @@ export default function App() {
   const analysis = useMemo(
     () => (metrics ? analyzeFace(metrics, deferredParams) : null),
     [metrics, deferredParams],
+  )
+
+  // ---- 医美方案：部位 + 项目 + 幅度 + 剂量 ----
+  // ⚠️ 必须在 analysis 之后声明：plan 要读 analysis.score 做「调整前评分」。
+  //    放到前面会命中 TDZ（Cannot access 'analysis' before initialization）。
+  const plan = useMemo(
+    () =>
+      points && metrics
+        ? buildPlan(points, {
+            metrics,
+            score: analysis?.score,
+            adjustedMetrics,
+            adjustedScore,
+            siteValues: deferredSiteValues,
+            ipdMm,
+            gender,
+          })
+        : null,
+    [points, metrics, analysis, adjustedMetrics, adjustedScore, deferredSiteValues, ipdMm, gender],
   )
 
   /** 综合评分变化量（必须在 analysis 之后声明） */
@@ -1072,6 +1190,28 @@ export default function App() {
             滑块为数学插值形变，<strong>不预测真实术后效果</strong>。双击滑块可单独归零。
           </p>
 
+          {/* ---------------- 医美部位 ---------------- */}
+          <ZonePanel
+            values={siteValues}
+            points={points}
+            scale={scale}
+            disabled={!points}
+            onChange={(key, v) => {
+              setSiteValues((s) => ({ ...s, [key]: v }))
+              // 调部位即视为要调整，自动切到「调整」视图查看照片形变
+              setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+            }}
+            onResetZone={(zoneKey) =>
+              setSiteValues((s) => {
+                const next = { ...s }
+                for (const site of sitesOf(zoneKey)) next[site.key] = 0
+                return next
+              })
+            }
+            onResetAll={() => setSiteValues(emptySites())}
+            onHighlight={setHighlightSite}
+          />
+
           {/* ---------------- 亚单位精调 ---------------- */}
           <SubunitPanel
             values={subunitValues}
@@ -1145,6 +1285,7 @@ export default function App() {
                 onAddPoint={addCustomPoint}
                 showWarp={false}
                 highlight={highlight}
+                siteMarkers={siteMarkers}
                 frameAnchors={frameAnchors}
                 showAnchors={showAnchors && view !== 'reference'}
                 onAnchorDrag={dragAnchor}
@@ -1370,6 +1511,16 @@ export default function App() {
               </p>
             )}
           </div>
+
+          <PlanPanel
+            plan={plan}
+            disabled={!points}
+            gender={gender}
+            ipdMm={ipdMm}
+            onGender={setGender}
+            onIpdMm={setIpdMm}
+            onExportImage={exportComparison}
+          />
 
           <div className="card">
             <h2 className="card-title">处方建议</h2>

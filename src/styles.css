@@ -1475,3 +1475,230 @@ body {
   line-height: 1.55;
   color: var(--text-dim);
 }
+
+/* ------------------------------------------------------------------ 医美部位 */
+
+.zone-block {
+  margin-top: 14px;
+}
+
+.zone-risk-flag {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.su-name em.su-risk {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.su-risk.high {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
+
+.su-risk.mid {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.su-risk.low {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+}
+
+.zone-mm {
+  margin-left: 6px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------------------ 医美方案 */
+
+.plan-scale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.plan-scale-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.plan-scale-unit {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.seg.sm button {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.score-input.sm {
+  width: 62px;
+  padding: 2px 5px;
+  font-size: 11px;
+}
+
+.plan-sub {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.plan-items,
+.plan-sugg {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-item {
+  padding: 8px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+}
+
+.plan-item.risk-high {
+  border-left-color: #ef4444;
+}
+
+.plan-item.risk-mid {
+  border-left-color: #f59e0b;
+}
+
+.plan-item.risk-low {
+  border-left-color: #22c55e;
+}
+
+.plan-item-head,
+.plan-sugg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.plan-name {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.plan-risk {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.plan-risk.high {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
+
+.plan-risk.mid {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.plan-risk.low {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+}
+
+.plan-mm {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.plan-proj {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.plan-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.plan-note,
+.plan-evidence {
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.plan-evidence {
+  color: var(--text);
+}
+
+.plan-conf {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+
+.plan-conf.high {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+}
+
+.plan-conf.mid {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.plan-sugg li {
+  padding: 7px 9px;
+  margin-bottom: 5px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.plan-warn {
+  margin: 10px 0 0;
+  padding: 8px 10px 8px 24px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.08);
+  font-size: 11px;
+  line-height: 1.6;
+  color: #fca5a5;
+}
+
+.plan-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.plan-disclaimer {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
