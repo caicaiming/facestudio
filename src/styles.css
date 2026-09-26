@@ -403,6 +403,101 @@ body {
   gap: 3px;
 }
 
+/* ------------------------------------------------- 目标分数反解 */
+.auto-tune {
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.auto-tune-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auto-tune-row label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.score-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.score-input::-webkit-outer-spin-button,
+.score-input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.score-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.score-input:disabled {
+  opacity: 0.4;
+}
+
+.btn-accent {
+  padding: 5px 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn-accent:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tune-msg {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.tune-msg.ok {
+  color: var(--positive);
+}
+
+.tune-msg.warn {
+  color: var(--warn);
+}
+
+.tune-detail {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.auto-tune .btn-ghost.sm {
+  margin-top: 8px;
+}
+
+.auto-tune .note {
+  margin-top: 8px;
+}
+
 .num-input {
   width: 62px;
   padding: 2px 6px;

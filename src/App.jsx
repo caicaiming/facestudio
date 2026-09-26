@@ -16,6 +16,7 @@ import {
 import { buildFullPoints, displaceAnchors, displaceByIDW } from './anchors.js'
 import { estimateHairline } from './hairline.js'
 import { analyzeFace, SLIDERS, DEFAULT_PARAMS } from './analyze.js'
+import { autoTune, POINT_MOVES, MIRROR_KEY } from './autoTune.js'
 import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
@@ -237,6 +238,7 @@ export default function App() {
         setCustomPoints([])
         setAddMode(false)
         setHistory([])
+        resetAutoTune()
         setView('detection')
         setOverlay('mesh')
         setPhase('done')
@@ -359,6 +361,98 @@ export default function App() {
       return g ? g.key : cur
     })
   }, [])
+
+  // ---- 目标分数反解 ----
+  const [targetScore, setTargetScore] = useState('85')
+  const [tuning, setTuning] = useState(false)
+  const [tuneResult, setTuneResult] = useState(null)
+  const [maxReachable, setMaxReachable] = useState(null)
+  // 自动调整前的现场，供「撤销」回退
+  const tuneSnapshotRef = useRef(null)
+
+  /** 换图 / 重置后清掉上一次自动调整的结果与现场 */
+  const resetAutoTune = useCallback(() => {
+    setTuneResult(null)
+    setMaxReachable(null)
+    tuneSnapshotRef.current = null
+  }, [])
+
+  /** 把求解结果翻译成一句人话 + 一行动过的清单 */
+  const describeTune = useCallback((r, goal) => {
+    const details = []
+    for (const s of SLIDERS) {
+      const v = Math.round(r.params[s.key] ?? 0)
+      if (v) details.push(`${s.label} ${v > 0 ? '+' : '−'}${Math.abs(v)}`)
+    }
+    for (const m of POINT_MOVES) {
+      const v = r.vars?.[m.key] ?? 0
+      if (Math.abs(v) < 1e-6) continue
+      details.push(`${m.label} ${v > 0 ? '+' : '−'}${(Math.abs(v) * 100).toFixed(1)}%`)
+    }
+    const mv = r.vars?.[MIRROR_KEY] ?? 0
+    if (mv > 1e-6) details.push(`对称化 ${(mv * 100).toFixed(0)}%`)
+
+    const score = r.score
+    if (score == null) return { ok: false, text: '这张照片无法完成测量，换一张正面清晰照片试试。', details }
+    // 先看有没有真的命中：上下 2 分内都算达成，避免「目标 88 拿到 87」被报成失败
+    if (Math.abs(score - goal) <= 2) {
+      return { ok: true, text: `✓ 已达成 ${score} 分（原 ${r.startScore ?? '—'} 分）。`, details }
+    }
+    if (r.ceiling) {
+      return {
+        ok: false,
+        text: `目标 ${goal} 分超出可达范围，已给到这张脸的当前最优 ${score} 分。`,
+        details,
+      }
+    }
+    return {
+      ok: true,
+      text: `已调到 ${score} 分（目标 ${goal} 分，差 ${Math.abs(score - goal)} 分）。`,
+      details,
+    }
+  }, [])
+
+  const handleAutoTune = useCallback(() => {
+    if (!points || !base) return
+    const goal = Number(targetScore)
+    if (!Number.isFinite(goal)) return
+    setTuning(true)
+    setTuneResult(null)
+    // 让「计算中」先渲染出来，再进 100ms 量级的搜索，避免界面看起来卡住
+    window.setTimeout(() => {
+      // 始终从原始照片出发求解：若以当前位移为基底继续叠加，
+      // 连续反解会层层累积（同一次目标第二次结果更高），结果不再可复现。
+      const r = autoTune({ points, base, target: goal })
+      tuneSnapshotRef.current = { params, pointOffsets }
+      setParams(r.params)
+      setPointOffsets(r.offsets)
+      setView('adjustment')
+      setTuneResult(describeTune(r, goal))
+      setTuning(false)
+    }, 30)
+  }, [points, base, targetScore, params, pointOffsets, describeTune])
+
+  const undoAutoTune = useCallback(() => {
+    const snap = tuneSnapshotRef.current
+    if (!snap) return
+    setParams(snap.params)
+    setPointOffsets(snap.pointOffsets)
+    tuneSnapshotRef.current = null
+    setTuneResult(null)
+  }, [])
+
+  // 换图后探一次「可达上限」，让用户在输入目标前就知道这张脸能被推到多高
+  useEffect(() => {
+    if (!points || !base) {
+      setMaxReachable(null)
+      return
+    }
+    const id = window.setTimeout(() => {
+      const r = autoTune({ points, base, target: 100 })
+      if (Number.isFinite(r.maxScore)) setMaxReachable(r.maxScore)
+    }, 400)
+    return () => window.clearTimeout(id)
+  }, [points, base])
 
   // ---- 自定义控制点 ----
   const addCustomPoint = useCallback(
@@ -769,6 +863,40 @@ export default function App() {
           )}
 
           <h2 className="card-title sub">调整参数</h2>
+
+          {/* ---------------- 目标分数反解 ---------------- */}
+          <div className="auto-tune">
+            <div className="auto-tune-row">
+              <label htmlFor="target-score">目标分数</label>
+              <input
+                id="target-score"
+                className="score-input"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={targetScore}
+                disabled={!points}
+                onChange={(e) => setTargetScore(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAutoTune()
+                }}
+              />
+              <button className="btn-accent" disabled={!points || tuning} onClick={handleAutoTune}>
+                {tuning ? '计算中…' : '自动调整'}
+              </button>
+            </div>
+            {tuneResult && <p className={`tune-msg ${tuneResult.ok ? 'ok' : 'warn'}`}>{tuneResult.text}</p>}
+            {tuneResult && tuneResult.details.length > 0 && (
+              <p className="tune-detail">已写入：{tuneResult.details.join(' · ')}</p>
+            )}
+            {tuneResult && <button className="btn-ghost sm" onClick={undoAutoTune}>撤销这次调整</button>}
+            <p className="note">
+              输入想要的分数即可反解参数：先用 5 路滑块自然形变，不足部分再用关键点和对称度补足
+              {typeof maxReachable === 'number' && `。这张脸当前手法上限约 ${maxReachable} 分`}。
+            </p>
+          </div>
+
           {SLIDERS.map((s) => (
             <ParamSlider
               key={s.key}
