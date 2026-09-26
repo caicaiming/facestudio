@@ -525,131 +525,8 @@ export default function App() {
       <main className="layout">
         {/* ---------------- 左栏：参数滑块 ---------------- */}
         <aside className="col-left card">
-          {/* ---------------- 逐点微调 ---------------- */}
-          <h2 className="card-title">逐点微调</h2>
-
-          <div className="point-picker">
-            <select
-              value={groupKey}
-              disabled={!points}
-              onChange={(e) => setGroupKey(e.target.value)}
-              aria-label="点位分组"
-            >
-              {POINT_GROUPS.map((g) => (
-                <option key={g.key} value={g.key}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedPoint ?? ''}
-              disabled={!points}
-              onChange={(e) =>
-                setSelectedPoint(e.target.value === '' ? null : Number(e.target.value))
-              }
-              aria-label="选择点位"
-            >
-              <option value="">选择点位…</option>
-              {groupPoints.map((i) => (
-                <option key={i} value={i}>
-                  {pointLabel(i)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 自定义点（索引 ≥ 76）不属于关键点面板，由下方「自定义控制点」区块接管 */}
-          {selectedPoint != null && selectedPoint < 68 ? (
-            <>
-              <div className="point-current">
-                <span className="point-badge">{selectedPoint}</span>
-                <span>{POINT_NAMES[selectedPoint]}</span>
-              </div>
-
-              {['dx', 'dy'].map((axis) => {
-                const o = pointOffsets[selectedPoint] || { dx: 0, dy: 0 }
-                return (
-                  <ParamSlider
-                    key={axis}
-                    label={axis === 'dx' ? '水平位移' : '垂直位移'}
-                    value={o[axis]}
-                    min={-POINT_OFFSET_RANGE}
-                    max={POINT_OFFSET_RANGE}
-                    step={0.5}
-                    unit="px"
-                    onChange={(v) => {
-                      setOffset(
-                        selectedPoint,
-                        axis === 'dx' ? v : o.dx,
-                        axis === 'dy' ? v : o.dy,
-                      )
-                      setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
-                    }}
-                    onReset={() =>
-                      setOffset(selectedPoint, axis === 'dx' ? 0 : o.dx, axis === 'dy' ? 0 : o.dy)
-                    }
-                  />
-                )
-              })}
-
-              <div className="point-actions">
-                <button
-                  className="btn-ghost sm"
-                  onClick={() => setOffset(selectedPoint, 0, 0)}
-                >
-                  重置该点
-                </button>
-                <button
-                  className="btn-ghost sm"
-                  disabled={adjustedCount === 0}
-                  onClick={() => setPointOffsets(emptyOffsets())}
-                >
-                  点位全部归零
-                </button>
-              </div>
-              <p className="note">
-                已调整 <strong>{adjustedCount}</strong> 个点。也可直接在照片上拖动点位（切到「点位」叠加层更好点选）。
-              </p>
-            </>
-          ) : (
-            <p className="note">
-              选择点位后可调其水平 / 垂直位移，也可直接在照片上拖动点位。
-              {selectedPoint != null && selectedPoint >= CUSTOM_BASE && '（当前选中自定义点，见下方面板）'}
-            </p>
-          )}
-
-          <h2 className="card-title sub">调整参数</h2>
-          {SLIDERS.map((s) => (
-            <ParamSlider
-              key={s.key}
-              label={s.label}
-              value={params[s.key] ?? 0}
-              min={s.min}
-              max={s.max}
-              step={s.step}
-              disabled={!points}
-              hint={s.hint}
-              onChange={(v) => {
-                setParams((p) => ({ ...p, [s.key]: v }))
-                // 调参即视为要调整，自动切到「调整」视图查看照片形变
-                setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
-              }}
-              onReset={() => setParams((p) => ({ ...p, [s.key]: 0 }))}
-            />
-          ))}
-          <button
-            className="btn-ghost"
-            disabled={!points}
-            onClick={() => setParams(DEFAULT_PARAMS)}
-          >
-            全部归零
-          </button>
-          <p className="note">
-            滑块为数学插值形变，<strong>不预测真实术后效果</strong>。双击滑块可单独归零。
-          </p>
-
           {/* ---------------- 自定义控制点 ---------------- */}
-          <h2 className="card-title sub">自定义控制点</h2>
+          <h2 className="card-title">自定义控制点</h2>
           <div className="custom-bar">
             <button
               className={`btn-ghost sm${addMode ? ' active' : ''}`}
@@ -757,6 +634,129 @@ export default function App() {
               </p>
             </>
           )}
+
+          {/* ---------------- 逐点微调 ---------------- */}
+          <h2 className="card-title sub">逐点微调</h2>
+
+          <div className="point-picker">
+            <select
+              value={groupKey}
+              disabled={!points}
+              onChange={(e) => setGroupKey(e.target.value)}
+              aria-label="点位分组"
+            >
+              {POINT_GROUPS.map((g) => (
+                <option key={g.key} value={g.key}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedPoint ?? ''}
+              disabled={!points}
+              onChange={(e) =>
+                setSelectedPoint(e.target.value === '' ? null : Number(e.target.value))
+              }
+              aria-label="选择点位"
+            >
+              <option value="">选择点位…</option>
+              {groupPoints.map((i) => (
+                <option key={i} value={i}>
+                  {pointLabel(i)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 自定义点（索引 ≥ 76）不属于关键点面板，由上方「自定义控制点」区块接管 */}
+          {selectedPoint != null && selectedPoint < 68 ? (
+            <>
+              <div className="point-current">
+                <span className="point-badge">{selectedPoint}</span>
+                <span>{POINT_NAMES[selectedPoint]}</span>
+              </div>
+
+              {['dx', 'dy'].map((axis) => {
+                const o = pointOffsets[selectedPoint] || { dx: 0, dy: 0 }
+                return (
+                  <ParamSlider
+                    key={axis}
+                    label={axis === 'dx' ? '水平位移' : '垂直位移'}
+                    value={o[axis]}
+                    min={-POINT_OFFSET_RANGE}
+                    max={POINT_OFFSET_RANGE}
+                    step={0.5}
+                    unit="px"
+                    onChange={(v) => {
+                      setOffset(
+                        selectedPoint,
+                        axis === 'dx' ? v : o.dx,
+                        axis === 'dy' ? v : o.dy,
+                      )
+                      setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+                    }}
+                    onReset={() =>
+                      setOffset(selectedPoint, axis === 'dx' ? 0 : o.dx, axis === 'dy' ? 0 : o.dy)
+                    }
+                  />
+                )
+              })}
+
+              <div className="point-actions">
+                <button
+                  className="btn-ghost sm"
+                  onClick={() => setOffset(selectedPoint, 0, 0)}
+                >
+                  重置该点
+                </button>
+                <button
+                  className="btn-ghost sm"
+                  disabled={adjustedCount === 0}
+                  onClick={() => setPointOffsets(emptyOffsets())}
+                >
+                  点位全部归零
+                </button>
+              </div>
+              <p className="note">
+                已调整 <strong>{adjustedCount}</strong> 个点。也可直接在照片上拖动点位（切到「点位」叠加层更好点选）。
+              </p>
+            </>
+          ) : (
+            <p className="note">
+              选择点位后可调其水平 / 垂直位移，也可直接在照片上拖动点位。
+              {selectedPoint != null && selectedPoint >= CUSTOM_BASE && '（当前选中自定义点，见上方「自定义控制点」面板）'}
+            </p>
+          )}
+
+          <h2 className="card-title sub">调整参数</h2>
+          {SLIDERS.map((s) => (
+            <ParamSlider
+              key={s.key}
+              label={s.label}
+              value={params[s.key] ?? 0}
+              min={s.min}
+              max={s.max}
+              step={s.step}
+              disabled={!points}
+              hint={s.hint}
+              onChange={(v) => {
+                setParams((p) => ({ ...p, [s.key]: v }))
+                // 调参即视为要调整，自动切到「调整」视图查看照片形变
+                setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+              }}
+              onReset={() => setParams((p) => ({ ...p, [s.key]: 0 }))}
+            />
+          ))}
+          <button
+            className="btn-ghost"
+            disabled={!points}
+            onClick={() => setParams(DEFAULT_PARAMS)}
+          >
+            全部归零
+          </button>
+          <p className="note">
+            滑块为数学插值形变，<strong>不预测真实术后效果</strong>。双击滑块可单独归零。
+          </p>
         </aside>
 
         {/* ---------------- 中栏：画布 ---------------- */}
