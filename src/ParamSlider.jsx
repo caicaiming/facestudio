@@ -65,6 +65,15 @@ export default function ParamSlider({
     if (v !== value) onChange(v)
   }
 
+  /** 步进：钳制到 [min,max] 并对齐 step 网格，与手动输入走同一套规则 */
+  const bump = (dir) => {
+    if (disabled) return
+    const raw = clamp(value + dir * step, min, max)
+    const v = clamp(Number((Math.round(raw / step) * step).toFixed(dec)), min, max)
+    setText(fmt(v))
+    if (v !== value) onChange(v)
+  }
+
   const zeroPos = ((0 - min) / (max - min)) * 100
   const valPos = ((value - min) / (max - min)) * 100
   const left = Math.min(zeroPos, valPos)
@@ -75,6 +84,16 @@ export default function ParamSlider({
       <div className="slider-head">
         <span className="slider-label">{label}</span>
         <div className="num-field">
+          <button
+            type="button"
+            className="step-btn"
+            disabled={disabled || value <= min}
+            aria-label={`${label}减一档`}
+            title="− 一档（可精确微调）"
+            onClick={() => bump(-1)}
+          >
+            −
+          </button>
           <input
             ref={inputRef}
             type="number"
@@ -97,6 +116,16 @@ export default function ParamSlider({
               }
             }}
           />
+          <button
+            type="button"
+            className="step-btn"
+            disabled={disabled || value >= max}
+            aria-label={`${label}加一档`}
+            title="＋ 一档（可精确微调）"
+            onClick={() => bump(1)}
+          >
+            ＋
+          </button>
           {unit && <span className="num-unit">{unit}</span>}
         </div>
       </div>

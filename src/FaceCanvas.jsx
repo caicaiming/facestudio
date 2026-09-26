@@ -128,6 +128,40 @@ function drawPoints(ctx, pts, lw, k) {
   }
 }
 
+/**
+ * 亚单位高亮：给指定点位画琥珀色光环 + 连线，指示该亚单位覆盖了哪些关键点。
+ * 只在悬停亚单位行时出现，不参与命中判定。
+ */
+function drawHighlight(ctx, pts, indices, lw, k) {
+  if (!indices || indices.length === 0) return
+  const r = Math.max(lw * 4.2, MARKER_PX.point * k * 2.1)
+  const ring = Math.max(1, 1.8 * k)
+
+  // 连线：把核心点串成轮廓，读起来比孤立圆环更像「一个亚单位」
+  if (indices.length > 1) {
+    ctx.beginPath()
+    ctx.moveTo(pts[indices[0]].x, pts[indices[0]].y)
+    for (let i = 1; i < indices.length; i++) {
+      ctx.lineTo(pts[indices[i]].x, pts[indices[i]].y)
+    }
+    ctx.lineWidth = Math.max(1, 1.6 * k)
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.55)'
+    ctx.stroke()
+  }
+
+  ctx.lineWidth = ring * 2.4
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.7)'
+  ctx.fillStyle = 'rgba(251, 191, 36, 0.95)'
+  ctx.beginPath()
+  for (const i of indices) {
+    if (i < 0 || i >= pts.length) continue
+    ctx.moveTo(pts[i].x + r, pts[i].y)
+    ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2)
+  }
+  ctx.stroke()
+  ctx.fill()
+}
+
 /** 淡底圆点：三庭 / 对称模式下没有点位图层，仍给出可抓目标 */
 function drawFaintPoints(ctx, pts, k, count = 68) {
   const r = Math.max(1.2, MARKER_PX.faint * k)
@@ -332,6 +366,8 @@ export default function FaceCanvas({
   addMode = false,
   onAddPoint,
   showWarp,
+  /** 需要高亮显示的点位索引（悬停亚单位行时给出），null 表示无 */
+  highlight = null,
   maxEdge = MAX_EDGE,
   emptyTitle = EMPTY.title,
   emptyHint = EMPTY.hint,
@@ -439,6 +475,7 @@ export default function FaceCanvas({
         drawFaintPoints(mctx, points, k)
       }
       drawCustomPoints(mctx, points, customCount, selectedPoint, lw, k)
+      drawHighlight(mctx, points, highlight, lw, k)
       const hov = hoverRef.current
       if (hov >= 0 && hov !== selectedPoint && hov < points.length) {
         drawHover(mctx, points, hov, lw, k)
@@ -485,6 +522,7 @@ export default function FaceCanvas({
     selectedPoint,
     triangles,
     customCount,
+    highlight,
   ])
 
   // ---------------------------------------------------------------- 点位拖拽

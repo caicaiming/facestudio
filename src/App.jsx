@@ -6,6 +6,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import FaceCanvas, { CUSTOM_BASE } from './FaceCanvas.jsx'
 import ParamSlider from './ParamSlider.jsx'
+import SubunitPanel from './SubunitPanel.jsx'
 import {
   measureFace,
   getDeformedPoints,
@@ -20,6 +21,7 @@ import { autoTune, POINT_MOVES, MIRROR_KEY } from './autoTune.js'
 import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
+import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
 
 /** 自定义控制点位移范围（图片自然像素） */
 const CUSTOM_OFFSET_RANGE = 60
@@ -124,6 +126,10 @@ export default function App() {
   const [params, setParams] = useState(DEFAULT_PARAMS)
   // 68 个关键点的逐点位移（自然像素），与 5 路预设滑块相互独立
   const [pointOffsets, setPointOffsets] = useState(emptyOffsets)
+  // 面部亚单位档位（−15…＋15），按美学分区的局部精细形变，独立于滑块与逐点位移
+  const [subunitValues, setSubunitValues] = useState(emptySubunits)
+  // 主图上高亮显示的点位（悬停亚单位行时给出），仅作视觉指示
+  const [highlight, setHighlight] = useState(null)
   const [selectedPoint, setSelectedPoint] = useState(null)
   const [groupKey, setGroupKey] = useState('all')
   const [view, setView] = useState('detection')
@@ -234,6 +240,8 @@ export default function App() {
         setMetrics(m)
         setParams(DEFAULT_PARAMS)
         setPointOffsets(emptyOffsets())
+        setSubunitValues(emptySubunits())
+        setHighlight(null)
         setSelectedPoint(null)
         setCustomPoints([])
         setAddMode(false)
@@ -283,8 +291,11 @@ export default function App() {
    */
   const previewPoints = useMemo(() => {
     if (!points) return null
-    // 先 5 路预设形变，再叠加逐点位移
-    const d = applyPointOffsets(getDeformedPoints(points, params), pointOffsets)
+    // 形变三层叠加：5 路预设滑块 → 亚单位局部形变 → 逐点手动位移
+    const d = applyPointOffsets(
+      applySubunitOffsets(getDeformedPoints(points, params), subunitValues),
+      pointOffsets,
+    )
     // 锚点软跟随：减小大形变时侧面三角形的剪切，避免发丝纹理拉成条纹
     const anchorsD = displaceAnchors(anchors, points, d)
     if (customPoints.length === 0) return d.concat(anchorsD)
@@ -296,7 +307,7 @@ export default function App() {
       d,
     ).map((p, i) => ({ x: p.x + customPoints[i].dx, y: p.y + customPoints[i].dy }))
     return d.concat(anchorsD, customD)
-  }, [points, params, pointOffsets, customPoints, anchors])
+  }, [points, params, subunitValues, pointOffsets, customPoints, anchors])
 
   /**
    * 主图点集：主图始终显示原图照片，叠加层必须与照片同坐标系，否则点位会浮在
@@ -602,6 +613,7 @@ export default function App() {
         displayPoints,
         previewPoints,
         pointOffsets,
+        subunitValues,
       }
     }
   }, [
@@ -615,6 +627,7 @@ export default function App() {
     displayPoints,
     previewPoints,
     pointOffsets,
+    subunitValues,
   ])
 
   return (
@@ -925,6 +938,25 @@ export default function App() {
           <p className="note">
             滑块为数学插值形变，<strong>不预测真实术后效果</strong>。双击滑块可单独归零。
           </p>
+
+          {/* ---------------- 亚单位精调 ---------------- */}
+          <SubunitPanel
+            values={subunitValues}
+            disabled={!points}
+            onChange={(key, v) => {
+              setSubunitValues((s) => ({ ...s, [key]: v }))
+              setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+            }}
+            onResetZone={(zoneKey) =>
+              setSubunitValues((s) => {
+                const next = { ...s }
+                for (const su of subunitsOf(zoneKey)) next[su.key] = 0
+                return next
+              })
+            }
+            onResetAll={() => setSubunitValues(emptySubunits())}
+            onHighlight={setHighlight}
+          />
         </aside>
 
         {/* ---------------- 中栏：画布 ---------------- */}
@@ -979,6 +1011,7 @@ export default function App() {
                 addMode={addMode}
                 onAddPoint={addCustomPoint}
                 showWarp={false}
+                highlight={highlight}
               />
             </div>
 
