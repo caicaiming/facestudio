@@ -297,13 +297,31 @@ export default function App() {
   }, [points, params, pointOffsets, customPoints, anchors])
 
   /**
-   * 主图点集：主图始终显示原图照片，视图只决定叠加层上的点位状态 ——
-   * 「检测」看原始点位，「调整」看形变后点位，「对照」不画叠加层。
+   * 主图点集：主图始终显示原图照片，叠加层必须与照片同坐标系，否则点位会浮在
+   * 「上一状态」的脸上（滑块一动就整体错位）。因此这里只叠加用户手动位移，
+   * 不含滑块形变 —— 滑块效果一律由预览区（previewPoints）呈现。
    */
+  const editedPoints = useMemo(() => {
+    if (!srcFull) return null
+    // applyPointOffsets 只接受恰好 68 点的点集（内部 isValidPoints 校验），
+    // 因此先切片应用，再把锚点与自定义点拼回。
+    const out = applyPointOffsets(srcFull.slice(0, 68), pointOffsets).concat(
+      srcFull.slice(68).map((p) => ({ x: p.x, y: p.y })),
+    )
+    // 自定义点：原始落点 + 手动位移（锚点 68–75 保持原位，作为网格外框）
+    for (let n = 0; n < customPoints.length; n++) {
+      const i = CUSTOM_BASE + n
+      if (i >= out.length) break
+      out[i] = { x: out[i].x + customPoints[n].dx, y: out[i].y + customPoints[n].dy }
+    }
+    return out
+  }, [srcFull, pointOffsets, customPoints])
+
   const displayPoints = useMemo(() => {
     if (!points) return null
-    return view === 'adjustment' ? previewPoints : srcFull
-  }, [points, view, previewPoints, srcFull])
+    // 「对照」视图不画叠加层，点位取原始值即可；其余视图用与照片对齐的编辑态点集
+    return view === 'reference' ? srcFull : editedPoints
+  }, [points, view, editedPoints, srcFull])
 
   // ---- 逐点位移回调 ----
   const setOffset = useCallback((i, dx, dy) => {
@@ -479,9 +497,31 @@ export default function App() {
   // 开发期调试句柄（生产构建剔除）
   useEffect(() => {
     if (import.meta.env.DEV) {
-      window.__faceStudio = { points, metrics, params, view, overlay, customPoints, triangles }
+      window.__faceStudio = {
+        points,
+        metrics,
+        params,
+        view,
+        overlay,
+        customPoints,
+        triangles,
+        displayPoints,
+        previewPoints,
+        pointOffsets,
+      }
     }
-  }, [points, metrics, params, view, overlay, customPoints, triangles])
+  }, [
+    points,
+    metrics,
+    params,
+    view,
+    overlay,
+    customPoints,
+    triangles,
+    displayPoints,
+    previewPoints,
+    pointOffsets,
+  ])
 
   return (
     <div className="app">
