@@ -431,6 +431,144 @@ function drawSelection(ctx, pts, index, lw, k) {
   ctx.stroke()
 }
 
+// ---------------------------------------------------------------- 放大镜
+
+/** 放大镜窗口直径（CSS 像素） */
+const LENS_PX = 208
+
+/** 整图缩放档位（缩放平移模式） */
+const ZOOM_STEPS = [1, 1.5, 2, 3, 4]
+
+/** 放大镜倍率档位 */
+const LOUPE_STEPS = [2, 3, 4, 6]
+
+/**
+ * 把源矩形 blit 到放大镜，源矩形越界时按同一比例裁剪目标矩形。
+ *
+ * ⚠️ 不能直接把越界的源矩形交给 drawImage：浏览器会「裁剪源并按比例裁剪
+ * 目标」，结果是内容被挤向一角而不是居中 —— 放大镜下中心就不再是鼠标所指
+ * 的那个点。这里手动裁剪，越界区域留作中性底色，中心始终对准指针。
+ */
+function blitClipped(ctx, src, srcW, srcH, sx, sy, side, r) {
+  const x0 = Math.max(0, sx)
+  const y0 = Math.max(0, sy)
+  const x1 = Math.min(srcW, sx + side)
+  const y1 = Math.min(srcH, sy + side)
+  if (x1 - x0 <= 0 || y1 - y0 <= 0) return
+  ctx.drawImage(
+    src,
+    x0,
+    y0,
+    x1 - x0,
+    y1 - y0,
+    (x0 - sx) * r,
+    (y0 - sy) * r,
+    (x1 - x0) * r,
+    (y1 - y0) * r,
+  )
+}
+
+/**
+ * 绘制放大镜内容。
+ *
+ * 两层做法，第二层是关键：
+ *   1. 底图 —— drawImage 按像素放大，看得清皮肤与边缘细节；
+ *   2. 点位标记 —— **不跟着放大**，而是把 k 与 lw 同时除以倍率 Z 后交给
+ *      同一套绘制原语重绘。
+ *
+ * 推导：放大镜的变换比 r = dpr·Z/k，标记自然半径 = MARKER_PX·(k/Z)，
+ * 落到屏幕 = MARKER_PX·(k/Z)·r/dpr = MARKER_PX，与未放大时完全一致。
+ * 道理也直观 —— 放大镜下要看清的是「标记中心压在哪个解剖位置」，
+ * 标记本身若跟着放大 Z 倍只会变成糊住目标的大圆点。
+ */
+function drawLens(ctx, o) {
+  const {
+    Wl,
+    img,
+    warp,
+    rw,
+    sx,
+    sy,
+    side,
+    r,
+    z,
+    points,
+    drawOverlay,
+    overlay,
+    metrics,
+    lw,
+    k,
+    triangles,
+    customCount,
+    selectedPoint,
+    highlight,
+    siteMarkers,
+    frameAnchors,
+    showAnchors,
+    activeAnchor,
+  } = o
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, Wl, Wl)
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(Wl / 2, Wl / 2, Wl / 2, 0, Math.PI * 2)
+  ctx.clip()
+  // 图外区域用中性底：明确表示「照片到这里就结束了」，而不是拉伸边缘像素
+  ctx.fillStyle = '#0b0b10'
+  ctx.fillRect(0, 0, Wl, Wl)
+
+  if (warp) {
+    blitClipped(ctx, warp, warp.width, warp.height, sx * rw, sy * rw, side * rw, r)
+  } else if (img) {
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    blitClipped(ctx, img, w, h, sx, sy, side, r)
+  }
+
+  if (drawOverlay && points) {
+    // 自然坐标 → 放大镜像素：lens = (nat − s) · r
+    ctx.setTransform(r, 0, 0, r, -sx * r, -sy * r)
+    const lwL = lw / z
+    const kL = k / z
+
+    if (overlay === 'mesh') drawMesh(ctx, points, lwL, triangles, kL)
+    else if (overlay === 'points') drawPoints(ctx, points, lwL, kL)
+    else if (overlay === 'three') {
+      drawThree(ctx, points, metrics, lwL)
+      drawFaintPoints(ctx, points, kL)
+    } else if (overlay === 'symmetry') {
+      drawSymmetry(ctx, points, lwL)
+      drawFaintPoints(ctx, points, kL)
+    }
+    drawCustomPoints(ctx, points, customCount, selectedPoint, lwL, kL)
+    drawSiteMarkers(ctx, siteMarkers, lwL, kL)
+    drawHighlight(ctx, points, highlight, lwL, kL)
+    if (showAnchors && frameAnchors) drawFrameAnchors(ctx, frameAnchors, lwL, kL, activeAnchor)
+    if (selectedPoint != null) drawSelection(ctx, points, selectedPoint, lwL, kL)
+  }
+
+  // 准星：画在窗口正中心（identity 变换），指示当前指针所指的那一个点
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  const c = Wl / 2
+  const g = Math.max(5, Wl * 0.05)
+  const arm = Math.max(1.5, Wl * 0.011)
+  ctx.strokeStyle = 'rgba(250, 204, 21, 0.9)'
+  ctx.lineWidth = arm
+  ctx.beginPath()
+  ctx.moveTo(c - g, c)
+  ctx.lineTo(c - arm * 1.8, c)
+  ctx.moveTo(c + arm * 1.8, c)
+  ctx.lineTo(c + g, c)
+  ctx.moveTo(c, c - g)
+  ctx.lineTo(c, c - arm * 1.8)
+  ctx.moveTo(c, c + arm * 1.8)
+  ctx.lineTo(c, c + g)
+  ctx.stroke()
+  ctx.restore()
+}
+
 function drawSymmetry(ctx, pts, lw) {
   const axis = fitLine([pts[8], pts[27], pts[30]])
 
@@ -497,6 +635,8 @@ export default function FaceCanvas({
   emptyTitle = EMPTY.title,
   emptyHint = EMPTY.hint,
   className = '',
+  /** 是否显示缩放 / 放大镜工具条（预览区同样需要放大看形变细节） */
+  tools = true,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   const warpOn = showWarp ?? view === 'adjustment'
@@ -514,6 +654,25 @@ export default function FaceCanvas({
   /** 供指针事件触发重绘（hover 高亮不进 React state，避免每次移动都重渲染） */
   const scheduleRef = useRef(() => {})
   const [imgReady, setImgReady] = useState(false)
+
+  // ---- 缩放 / 放大镜 ----
+  // zoom 同时存 ref 与 state：ref 供 wheel / 拖拽等原生回调读取最新值，
+  // state 只为触发一次重渲染（k 随显示宽度变化，叠加层必须按新尺度重绘）。
+  const [zoom, setZoom] = useState(1)
+  const zoomRef = useRef(1)
+  const [loupeOn, setLoupeOn] = useState(false)
+  const loupeOnRef = useRef(false)
+  const [loupeZ, setLoupeZ] = useState(3)
+  const loupeZRef = useRef(3)
+  const [hovering, setHovering] = useState(false)
+  /** 平移偏移（CSS px）。拖动时直接改 DOM style，不进 React state */
+  const panRef = useRef({ x: 0, y: 0 })
+  const zoomLayerRef = useRef(null)
+  const lensRef = useRef(null)
+  const panDragRef = useRef(null)
+  /** 指针当前位置的自然像素坐标，放大镜每次重绘都以此为中心 */
+  const pointerNatRef = useRef(null)
+  const lensRafRef = useRef(0)
 
   // 换图：清空加载态与纹理缓存
   useEffect(() => {
@@ -586,7 +745,8 @@ export default function FaceCanvas({
 
       const lw = Math.max(1, w / 500)
       // 显示缩放换算：1 CSS 像素对应的画布像素数。标记按屏幕尺寸绘制的关键。
-      const dispW = wrapRef.current?.getBoundingClientRect().width || 0
+      // 取图片自身的显示宽度（而非容器），整图缩放后标记才不会被一起放大。
+      const dispW = img.getBoundingClientRect().width || 0
       const k = dispW > 0 ? w / dispW : 1
 
       const tm = performance.now()
@@ -654,7 +814,184 @@ export default function FaceCanvas({
     frameAnchors,
     showAnchors,
     activeAnchor,
+    // 缩放改变显示宽度 → k 变 → 标记必须按新尺度重绘
+    zoom,
   ])
+
+  // ---------------------------------------------------------------- 缩放 / 放大镜
+
+  /** 把平移量约束在合法区间：放大时可自由平移，缩小时强制居中 */
+  const clampPan = () => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const cw = wrap.clientWidth
+    const ch = wrap.clientHeight
+    const z = zoomRef.current
+    const fit = (c, s) => (s >= c ? [c - s, 0] : [(c - s) / 2, (c - s) / 2])
+    const [loX, hiX] = fit(cw, cw * z)
+    const [loY, hiY] = fit(ch, ch * z)
+    panRef.current.x = Math.min(hiX, Math.max(loX, panRef.current.x))
+    panRef.current.y = Math.min(hiY, Math.max(loY, panRef.current.y))
+  }
+
+  /** 把 zoom / pan 写进变换层。平移不进 React state，避免拖动时整棵树重渲染 */
+  const applyTransform = () => {
+    const el = zoomLayerRef.current
+    if (!el) return
+    const { x, y } = panRef.current
+    el.style.transform = `translate(${x}px, ${y}px) scale(${zoomRef.current})`
+  }
+
+  useEffect(() => {
+    clampPan()
+    applyTransform()
+  }, [zoom, imageSrc, imgReady])
+
+  /** 放大镜定位：跟随指针，靠边翻转到另一侧，且始终不越出画布边界 */
+  const placeLens = (clientX, clientY) => {
+    const wrap = wrapRef.current
+    const lens = lensRef.current
+    if (!wrap || !lens) return
+    const r = wrap.getBoundingClientRect()
+    const off = 26
+    let x = clientX - r.left + off
+    let y = clientY - r.top + off
+    if (x + LENS_PX > r.width) x = clientX - r.left - LENS_PX - off
+    if (y + LENS_PX > r.height) y = clientY - r.top - LENS_PX - off
+    lens.style.left = `${Math.max(0, Math.min(x, r.width - LENS_PX))}px`
+    lens.style.top = `${Math.max(0, Math.min(y, r.height - LENS_PX))}px`
+  }
+
+  const paintLens = () => {
+    const lens = lensRef.current
+    const img = imgRef.current
+    if (!lens || !img) return
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    if (!w || !h) return
+    const p = pointerNatRef.current
+    if (!p) return
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    const Wl = Math.round(LENS_PX * dpr)
+    if (lens.width !== Wl) {
+      lens.width = Wl
+      lens.height = Wl
+    }
+    const rect = img.getBoundingClientRect()
+    const k = rect.width > 0 ? w / rect.width : 1
+    const z = loupeZRef.current
+    // 源区域边长：窗口在屏幕上占 LENS_PX，放大 z 倍 → 源只取 LENS_PX/z
+    const side = (LENS_PX / z) * k
+    if (!(side > 0)) return
+
+    const wc = warpRef.current
+    const useWarp = warpOn && !!wc && wc.width > 0 && !!warperRef.current
+    drawLens(lens.getContext('2d'), {
+      Wl,
+      img,
+      warp: useWarp ? wc : null,
+      rw: useWarp ? wc.width / w : 1,
+      sx: p.x - side / 2,
+      sy: p.y - side / 2,
+      side,
+      r: Wl / side,
+      z,
+      points,
+      drawOverlay,
+      overlay,
+      metrics,
+      lw: Math.max(1, w / 500),
+      k,
+      triangles,
+      customCount,
+      selectedPoint,
+      highlight,
+      siteMarkers,
+      frameAnchors,
+      showAnchors,
+      activeAnchor,
+    })
+  }
+
+  const scheduleLens = () => {
+    if (lensRafRef.current) return
+    lensRafRef.current = requestAnimationFrame(() => {
+      lensRafRef.current = 0
+      paintLens()
+    })
+  }
+
+  useEffect(
+    () => () => {
+      if (lensRafRef.current) cancelAnimationFrame(lensRafRef.current)
+    },
+    [],
+  )
+
+  // 滚轮：放大镜开启时调倍率，否则调整图缩放。
+  // React 的 onWheel 走 passive 事件委托，preventDefault 无效，只能手动绑定
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap || !imageSrc) return
+    const onWheel = (e) => {
+      e.preventDefault()
+      const dir = e.deltaY > 0 ? -1 : 1
+      if (loupeOnRef.current) {
+        const i = LOUPE_STEPS.indexOf(loupeZRef.current)
+        const ni = Math.min(LOUPE_STEPS.length - 1, Math.max(0, (i < 0 ? 1 : i) + dir))
+        const nz = LOUPE_STEPS[ni]
+        if (nz === loupeZRef.current) return
+        loupeZRef.current = nz
+        setLoupeZ(nz)
+        return
+      }
+      const i = ZOOM_STEPS.indexOf(zoomRef.current)
+      const ni = Math.min(ZOOM_STEPS.length - 1, Math.max(0, (i < 0 ? 0 : i) + dir))
+      const nz = ZOOM_STEPS[ni]
+      if (nz === zoomRef.current) return
+      // 以指针为锚点：让指针下的那个图像点在缩放前后停在同一屏幕位置
+      const r = wrap.getBoundingClientRect()
+      const mx = e.clientX - r.left
+      const my = e.clientY - r.top
+      const ratio = nz / zoomRef.current
+      panRef.current.x = mx - (mx - panRef.current.x) * ratio
+      panRef.current.y = my - (my - panRef.current.y) * ratio
+      zoomRef.current = nz
+      setZoom(nz)
+    }
+    wrap.addEventListener('wheel', onWheel, { passive: false })
+    return () => wrap.removeEventListener('wheel', onWheel)
+  }, [imageSrc])
+
+  /** 切换整图缩放档位（工具条按钮用，以画布中心为锚点） */
+  const stepZoom = (dir) => {
+    const i = ZOOM_STEPS.indexOf(zoomRef.current)
+    const ni = Math.min(ZOOM_STEPS.length - 1, Math.max(0, (i < 0 ? 0 : i) + dir))
+    const nz = ZOOM_STEPS[ni]
+    if (nz === zoomRef.current) return
+    const wrap = wrapRef.current
+    if (wrap) {
+      const ratio = nz / zoomRef.current
+      const cx = wrap.clientWidth / 2
+      const cy = wrap.clientHeight / 2
+      panRef.current.x = cx - (cx - panRef.current.x) * ratio
+      panRef.current.y = cy - (cy - panRef.current.y) * ratio
+    }
+    zoomRef.current = nz
+    setZoom(nz)
+  }
+
+  const toggleLoupe = () => {
+    const next = !loupeOnRef.current
+    loupeOnRef.current = next
+    setLoupeOn(next)
+  }
+
+  const pickLoupeZ = (z) => {
+    loupeZRef.current = z
+    setLoupeZ(z)
+  }
 
   // ---------------------------------------------------------------- 点位拖拽
 
@@ -666,7 +1003,9 @@ export default function FaceCanvas({
     const w = img.naturalWidth || img.width
     const h = img.naturalHeight || img.height
     if (!w || !h) return null
-    const r = wrap.getBoundingClientRect()
+    // ⚠️ 必须用【图片】的 rect 而不是容器的：整图缩放后容器尺寸不变，
+    // 用容器做分母会把坐标算回未缩放的位置，拖点立刻错位。
+    const r = img.getBoundingClientRect()
     if (!r.width || !r.height) return null
     return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h }
   }
@@ -683,7 +1022,8 @@ export default function FaceCanvas({
     if (!p || !points) return null
     const img = imgRef.current
     const w = img?.naturalWidth || img?.width || 1
-    const dispW = wrapRef.current?.getBoundingClientRect().width || 0
+    // 同 toNatural：按图片实际显示宽度换算，缩放后命中半径才跟得上屏幕像素
+    const dispW = img?.getBoundingClientRect().width || 0
     const k = dispW > 0 ? w / dispW : 1
     const hitR = Math.max(w * 0.02, MARKER_PX.hit * k)
 
@@ -716,9 +1056,31 @@ export default function FaceCanvas({
     return bestD > hitR ? null : { kind: 'point', id: best }
   }
 
-  const onPointerDown = (e) => {
-    if (!interactive) return
+  /** 记录指针位置并安排放大镜重绘（rAF 节流） */
+  const trackPointer = (e) => {
+    if (!loupeOnRef.current) return
     const p = toNatural(e)
+    if (!p) return
+    pointerNatRef.current = p
+    placeLens(e.clientX, e.clientY)
+    scheduleLens()
+  }
+
+  const startPan = (e) => {
+    e.preventDefault()
+    panDragRef.current = { x: e.clientX, y: e.clientY, px: panRef.current.x, py: panRef.current.y }
+    e.currentTarget.style.cursor = 'grabbing'
+  }
+
+  const onPointerDown = (e) => {
+    trackPointer(e)
+    const p = toNatural(e)
+
+    // 非交互画布（预览区）也要能拖动平移 —— 放大看形变细节同样需要
+    if (!interactive) {
+      if (p && zoomRef.current > 1) startPan(e)
+      return
+    }
     if (!p) return
 
     // preventDefault 会阻止焦点转移，导致左栏数值框收不到 blur、键入值滞留。
@@ -734,7 +1096,11 @@ export default function FaceCanvas({
       onAddPoint?.(p.x, p.y)
       return
     }
-    if (!hit) return
+    if (!hit) {
+      // 放大状态下拖空白处 = 平移画面（未放大时无意义，保持原样）
+      if (zoomRef.current > 1) startPan(e)
+      return
+    }
     e.preventDefault()
     dragRef.current = { kind: hit.kind, id: hit.id, lastX: p.x, lastY: p.y }
     e.currentTarget.style.cursor = 'grabbing'
@@ -743,6 +1109,17 @@ export default function FaceCanvas({
   }
 
   const onPointerMove = (e) => {
+    trackPointer(e)
+
+    const pd = panDragRef.current
+    if (pd) {
+      panRef.current.x = pd.px + (e.clientX - pd.x)
+      panRef.current.y = pd.py + (e.clientY - pd.y)
+      clampPan()
+      applyTransform()
+      return
+    }
+
     if (!interactive) return
     const p = toNatural(e)
     if (!p) return
@@ -773,6 +1150,10 @@ export default function FaceCanvas({
   }
 
   const endDrag = () => {
+    if (panDragRef.current) {
+      panDragRef.current = null
+      if (wrapRef.current) wrapRef.current.style.cursor = 'default'
+    }
     if (dragRef.current) {
       dragRef.current = null
       if (wrapRef.current) wrapRef.current.style.cursor = 'default'
@@ -790,34 +1171,112 @@ export default function FaceCanvas({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
-      onPointerLeave={endDrag}
+      onPointerEnter={(e) => {
+        setHovering(true)
+        trackPointer(e)
+      }}
+      onPointerLeave={() => {
+        setHovering(false)
+        endDrag()
+      }}
     >
-      {imageSrc ? (
-        <>
-          {/* visibility 而非 opacity：隐藏时不参与绘制，但仍占位保持布局 */}
-          <img
-            ref={imgRef}
-            src={imageSrc}
-            alt="待分析的人脸照片"
-            draggable={false}
-            style={{ visibility: warpOn ? 'hidden' : 'visible' }}
-          />
-          {/* display:none 而非 opacity:0：非调整视图让整层退出合成，减少每帧开销 */}
-          <canvas
-            ref={warpRef}
-            className="layer warp"
-            style={{ display: warpOn ? 'block' : 'none' }}
-          />
-          <canvas ref={overlayRef} className="layer overlay" />
-          <canvas ref={meshRef} className="layer mesh" />
-        </>
-      ) : (
-        <div className="canvas-empty">
-          <div className="canvas-empty-icon">＋</div>
-          <p>{emptyTitle}</p>
-          <p className="dim">{emptyHint}</p>
+      {/* 变换层：整图缩放与平移都施加在这一层，img 与三个 canvas 一起变换。
+          transform 不影响布局，故容器高度恒定；溢出部分由容器 overflow 裁掉。 */}
+      <div className="canvas-zoom" ref={zoomLayerRef}>
+        {imageSrc ? (
+          <>
+            {/* visibility 而非 opacity：隐藏时不参与绘制，但仍占位保持布局 */}
+            <img
+              ref={imgRef}
+              src={imageSrc}
+              alt="待分析的人脸照片"
+              draggable={false}
+              style={{ visibility: warpOn ? 'hidden' : 'visible' }}
+            />
+            {/* display:none 而非 opacity:0：非调整视图让整层退出合成，减少每帧开销 */}
+            <canvas
+              ref={warpRef}
+              className="layer warp"
+              style={{ display: warpOn ? 'block' : 'none' }}
+            />
+            <canvas ref={overlayRef} className="layer overlay" />
+            <canvas ref={meshRef} className="layer mesh" />
+          </>
+        ) : (
+          <div className="canvas-empty">
+            <div className="canvas-empty-icon">＋</div>
+            <p>{emptyTitle}</p>
+            <p className="dim">{emptyHint}</p>
+          </div>
+        )}
+      </div>
+
+      {tools && imageSrc && (
+        <div className="canvas-tools">
+          <button
+            type="button"
+            className={`ct-btn${loupeOn ? ' active' : ''}`}
+            onClick={toggleLoupe}
+            title="放大镜：窗口跟随鼠标局部放大，滚轮切换倍率"
+          >
+            放大镜
+          </button>
+          <div className="ct-group">
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => stepZoom(-1)}
+              disabled={zoom <= ZOOM_STEPS[0]}
+              title="缩小"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="ct-btn ct-pct"
+              onClick={() => stepZoom(-ZOOM_STEPS.length)}
+              title="复位到 100%"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="ct-btn"
+              onClick={() => stepZoom(1)}
+              disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+              title="放大"
+            >
+              ＋
+            </button>
+          </div>
+          {loupeOn && (
+            <div className="ct-group">
+              {LOUPE_STEPS.map((z) => (
+                <button
+                  key={z}
+                  type="button"
+                  className={`ct-btn${loupeZ === z ? ' active' : ''}`}
+                  onClick={() => pickLoupeZ(z)}
+                  title={`${z} 倍放大`}
+                >
+                  {z}×
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
+      {/* 放大镜窗口：不在变换层内，始终按屏幕坐标定位 */}
+      <canvas
+        ref={lensRef}
+        className="canvas-loupe"
+        style={{
+          display: loupeOn && hovering ? 'block' : 'none',
+          width: LENS_PX,
+          height: LENS_PX,
+        }}
+      />
     </div>
   )
 }
