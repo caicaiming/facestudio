@@ -29,6 +29,16 @@ import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
 /** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
 const MAX_EDGE = 1600
 
+/**
+ * overlay / mesh 画布的像素面积上限。
+ *
+ * iOS Safari 的 canvas 面积上限约 16.7M 像素（4096×4096），超了画布会
+ * 静默变空白；桌面端虽不报错，两张 37M 像素的画布也要吃掉上百 MB 内存。
+ * 取 12M（≈3464×3464）留足余量。图片显示尺寸本来就只有几百 CSS px，
+ * 降分辨率后肉眼无差别。
+ */
+const OVERLAY_MAX_AREA = 12e6
+
 /** 空态默认文案 */
 const EMPTY = {
   title: '上传一张正面人脸照开始分析',
@@ -771,11 +781,24 @@ export default function FaceCanvas({
       const wc = warpRef.current
       if (!oc || !mc || !wc) return
 
-      if (oc.width !== w || oc.height !== h) {
-        oc.width = w
-        oc.height = h
-        mc.width = w
-        mc.height = h
+      /**
+       * 叠加层画布的面积上限。
+       *
+       * 原图 4000×4000 时，overlay / mesh 两张画布就是 2×16M 像素 = 128MB，
+       * 超大图还会撞上 iOS Safari 的 canvas 面积上限（约 16.7M 像素）：
+       * 超过之后画布静默变空白，表现就是「点位全没了」。降到上限内再画，
+       * 靠 setTransform 把绘制坐标拉回自然坐标系 —— 业务代码照旧用自然坐标，
+       * 只是画布分辨率低一些（显示尺寸本来就只有几百 CSS px，肉眼看不出差别）。
+       */
+      const ov = w * h > OVERLAY_MAX_AREA ? Math.sqrt(OVERLAY_MAX_AREA / (w * h)) : 1
+      const cw = Math.max(1, Math.round(w * ov))
+      const ch = Math.max(1, Math.round(h * ov))
+
+      if (oc.width !== cw || oc.height !== ch) {
+        oc.width = cw
+        oc.height = ch
+        mc.width = cw
+        mc.height = ch
       }
 
       // ---- warp 层：形变后的照片（draw 内部已绘制底图，网格外保持原样）----
@@ -794,10 +817,17 @@ export default function FaceCanvas({
       }
 
       // ---- overlay / mesh 层 ----
+      // 清空用画布像素坐标，之后切到「自然坐标 × ov」，绘制代码无需感知缩放。
       const octx = oc.getContext('2d')
       const mctx = mc.getContext('2d')
-      octx.clearRect(0, 0, w, h)
-      mctx.clearRect(0, 0, w, h)
+      octx.setTransform(1, 0, 0, 1, 0, 0)
+      mctx.setTransform(1, 0, 0, 1, 0, 0)
+      octx.clearRect(0, 0, cw, ch)
+      mctx.clearRect(0, 0, cw, ch)
+      if (ov !== 1) {
+        octx.setTransform(ov, 0, 0, ov, 0, 0)
+        mctx.setTransform(ov, 0, 0, ov, 0, 0)
+      }
 
       if (!drawOverlay || !points) return
 

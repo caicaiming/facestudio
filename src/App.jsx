@@ -31,6 +31,12 @@ import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './poi
 import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
 import { applySiteOffsets, earAnchorOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
 import { buildPlan, mmScale } from './aesthetic.js'
+import {
+  DETECT_MAX_EDGE,
+  detectScale,
+  mapPointsBack,
+  mapBoxBack,
+} from './detect.js'
 import ZonePanel from './ZonePanel.jsx'
 import PlanPanel from './PlanPanel.jsx'
 
@@ -139,6 +145,24 @@ function loadImage(src) {
   })
 }
 
+/**
+ * 把图片按 scale 画到离屏 canvas，供检测使用。
+ *
+ * 走 canvas 而不是直接缩放 img 元素：canvas 的 drawImage 用的是高质量
+ * 重采样，比检测器内部那次「一步缩到 416」的双线性保真得多 ——
+ * 这正是大图点位走形的根因（见 detect.js 顶部说明）。
+ */
+function downscaleToCanvas(img, scale) {
+  const cv = document.createElement('canvas')
+  cv.width = Math.max(1, Math.round((img.naturalWidth || img.width) * scale))
+  cv.height = Math.max(1, Math.round((img.naturalHeight || img.height) * scale))
+  const ctx = cv.getContext('2d')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(img, 0, 0, cv.width, cv.height)
+  return cv
+}
+
 export default function App() {
   const [phase, setPhase] = useState('loading-model')
   const [imageSrc, setImageSrc] = useState(null)
@@ -227,9 +251,25 @@ export default function App() {
       urlRef.current = url
       try {
         const img = await loadImage(url)
-        const det = await faceapi
-          .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416 }))
-          .withFaceLandmarks()
+        /**
+         * 大图先降采样再检测（见 detect.js）。
+         *
+         * 直接把 4000px 级的原图喂给检测器，框会明显走形、点位挤成一团
+         * （实测放大 3× 后平均偏差 78px）。先缩到最长边 ≤ DETECT_MAX_EDGE，
+         * 检测结果再按同一系数还原到原图坐标，尺寸无关性就回来了。
+         *
+         * 降采样后万一没检出（小脸被缩没了），退回原图再试一次 ——
+         * 宁可多跑一次检测，也不要误报「未检测到人脸」。
+         */
+        const s = detectScale(img.naturalWidth, img.naturalHeight, DETECT_MAX_EDGE)
+        const input = s < 1 ? downscaleToCanvas(img, s) : img
+        const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 416 })
+        let det = await faceapi.detectSingleFace(input, opts).withFaceLandmarks()
+        let usedScale = s
+        if (!det && s < 1) {
+          det = await faceapi.detectSingleFace(img, opts).withFaceLandmarks()
+          usedScale = 1
+        }
 
         if (!det) {
           setImageSrc(url)
@@ -241,7 +281,11 @@ export default function App() {
           return
         }
 
-        const pts = det.landmarks.positions.map((p) => ({ x: p.x, y: p.y }))
+        // 点位与检测框都在「检测用图」坐标系里，统一还原到原图坐标
+        const pts = mapPointsBack(
+          det.landmarks.positions.map((p) => ({ x: p.x, y: p.y })),
+          usedScale,
+        )
         if (pts.length !== 68) {
           setImageSrc(url)
           setRawPoints(null)
@@ -252,7 +296,7 @@ export default function App() {
           return
         }
 
-        const b = det.detection.box
+        const b = mapBoxBack(det.detection.box, usedScale)
         const hairlineY = estimateHairline(img, pts)
         const m = measureFace(
           pts,

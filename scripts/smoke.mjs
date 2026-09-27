@@ -45,7 +45,9 @@ await page.waitForFunction(
 log('✓ 人脸检测完成')
 
 // 3) 抓取指标面板
-const metrics = await page.$$eval('.metrics tr', (rows) =>
+//    注意只取「几何指标」表：调整对比表也挂着 .metrics 类，且表头行
+//    只有 <th> 没有 <td>，会把下面的解构炸出 TypeError。
+const metrics = await page.$$eval('.metrics:not(.compare) tr', (rows) =>
   rows.map((r) => [...r.querySelectorAll('td')].map((td) => td.textContent.trim())),
 )
 log('✓ 几何指标：')
