@@ -7,7 +7,10 @@
 //      （例如 dist 复制到 /tmp/pages-sim/facestudio/，则传 /tmp/pages-sim）
 //      —— 不要用 python -m http.server：Windows 下它把 .js 发成
 //      text/plain，浏览器按规范拒绝执行模块脚本，会出现假失败。
-//   3. node scripts/verify-pages.mjs
+//   3. VERIFY_BASE=http://localhost:8082/facestudio/ node scripts/verify-pages.mjs
+//
+// 同一个脚本也能验真实线上站点（PROD=true 时提高等待上限，容忍公网延迟）：
+//   VERIFY_BASE=https://<user>.github.io/<repo>/ node scripts/verify-pages.mjs
 //
 // 注意：window.__faceStudio 仅 DEV 暴露，本脚本全部用 DOM / 画布像素判断。
 // tfjs 的 wasm 探测性请求 404 属已知行为（失败即降级 CPU），已排除。
@@ -15,7 +18,13 @@ import { chromium } from 'playwright-core'
 import path from 'node:path'
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-const BASE = 'http://localhost:8082/facestudio/'
+const PROD = !!(process.env.PROD ?? (process.env.VERIFY_BASE ?? '').includes('github.io'))
+const BASE =
+  process.env.VERIFY_BASE ||
+  (PROD ? 'https://caicaiming.github.io/facestudio/' : 'http://localhost:8082/facestudio/')
+// 公网比本地慢：轮询次数与间隔都放宽
+const MODEL_TRIES = PROD ? 45 : 30
+const ANALYZE_TRIES = PROD ? 30 : 20
 
 const browser = await chromium.launch({
   executablePath: CHROME,
@@ -39,12 +48,27 @@ await page.goto(BASE, { waitUntil: 'domcontentloaded' })
 
 // 1. 模型是否加载成功（这一步依赖 ./models 的正确解析）
 let status = ''
-for (let i = 0; i < 30; i++) {
+for (let i = 0; i < MODEL_TRIES; i++) {
   await page.waitForTimeout(2000)
   status = (await page.textContent('.status').catch(() => '')) || ''
   if (status.includes('就绪') || status.includes('失败') || status.includes('错误')) break
 }
 console.log('模型加载状态：', status.trim() || '(未取到)')
+
+// 1b. 模型未就绪时绝不能上传 —— 否则 face-api 抛
+//     "TinyYolov2 - load model before inference"，导致假失败。
+//     公网首访有 CDN 冷启动，这里再兜一段等待。
+if (!status.includes('就绪')) {
+  await page
+    .waitForFunction(
+      () => ((document.querySelector('.status')?.textContent || '').includes('就绪')),
+      null,
+      { timeout: 120000 },
+    )
+    .catch(() => {})
+  status = (await page.textContent('.status').catch(() => '')) || ''
+  console.log('模型二次等待后状态：', status.trim() || '(未取到)')
+}
 
 // 2. 上传样张跑一次分析
 await page.setInputFiles(
@@ -52,7 +76,7 @@ await page.setInputFiles(
   path.resolve('public/sample-face.png'),
 )
 let analyzed = ''
-for (let i = 0; i < 20; i++) {
+for (let i = 0; i < ANALYZE_TRIES; i++) {
   await page.waitForTimeout(2000)
   analyzed = (await page.textContent('.status').catch(() => '')) || ''
   if (analyzed.includes('分析完成') || analyzed.includes('未检测') || analyzed.includes('失败')) break
@@ -60,26 +84,53 @@ for (let i = 0; i < 20; i++) {
 console.log('分析结果：', analyzed.trim() || '(未取到)')
 
 // 3. 叠加层是否真的画出了点位标记
-//    注意：window.__faceStudio 只在 DEV 下暴露（生产构建剔除），
-//    所以生产产物只能靠 DOM + 画布像素来判断。
-const info = await page.evaluate(() => {
-  const cs = Array.from(document.querySelectorAll('canvas'))
-  const overlay = cs.find((c) => (c.className || '').includes('overlay'))
-  let painted = 0
-  if (overlay && overlay.width) {
-    const d = overlay.getContext('2d').getImageData(0, 0, overlay.width, overlay.height).data
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) painted++
+//    注意：window.__faceStudio 只在 DEV 暴露（生产构建剔除），
+//    所以生产产物只能靠 DOM + 画布像素判断。
+//    画布有多层（检测/形变双画布 + mesh + 放大镜）。探针实测：点位与编号画在
+//    **mesh 层**，overlay 层只在选中/拖点时有内容，warp 层是不透明的形变图。
+//    因此这里只看透明的标记层（overlay / mesh），扫描全部实例取最大值；
+//    并轮询几秒 —— 分析完成后 React 还有一次重绘，立即读会读到空帧。
+const info = await (async () => {
+  let out = { canvasCount: 0, overlaySize: null, paintedPx: 0, score: null }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    out = await page.evaluate(() => {
+      const cs = Array.from(document.querySelectorAll('canvas'))
+      const layers = cs.filter((c) => {
+        const k = c.className || ''
+        return k.includes('overlay') || k.includes('mesh')
+      })
+      let painted = 0
+      let best = null
+      for (const c of layers) {
+        if (!c.width || !c.height) continue
+        let n = 0
+        try {
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data
+          for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++
+        } catch {
+          /* 跨域画布等，跳过 */
+        }
+        if (n > painted) {
+          painted = n
+          best = c
+        }
+      }
+      const text = document.body.innerText || ''
+      const m = text.match(/(\d+(?:\.\d+)?)\s*分/)
+      return {
+        canvasCount: cs.length,
+        overlayCount: layers.length,
+        overlaySize: best ? `${best.width}x${best.height}` : null,
+        paintedPx: painted,
+        score: m ? m[1] : null,
+      }
+    })
+    if (out.paintedPx > 1000) break
+    await page.waitForTimeout(1000)
   }
-  const text = document.body.innerText || ''
-  const m = text.match(/(\d+(?:\.\d+)?)\s*分/)
-  return {
-    canvasCount: cs.length,
-    overlaySize: overlay ? `${overlay.width}x${overlay.height}` : null,
-    paintedPx: painted,
-    score: m ? m[1] : null,
-  }
-})
-console.log('canvas 层数：', info.canvasCount, '| 叠加层：', info.overlaySize ?? '—')
+  return out
+})()
+console.log('canvas 层数：', info.canvasCount, '| overlay 层：', info.overlayCount ?? 0, '| 尺寸：', info.overlaySize ?? '—')
 console.log('叠加层已绘制像素：', info.paintedPx, info.paintedPx > 1000 ? '✅（点位已画出）' : '❌（疑似空白）')
 console.log('页面评分：', info.score ?? '（未在文本中匹配到）')
 
@@ -95,5 +146,5 @@ const pass =
   realFailed.length === 0
 console.log(pass ? '\n✅ 子路径部署全链路通过' : '\n❌ 存在失败项')
 
-await page.screenshot({ path: '_pages-verify.png' })
+await page.screenshot({ path: PROD ? '_pages-verify-online.png' : '_pages-verify.png' })
 await browser.close()

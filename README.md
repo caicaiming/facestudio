@@ -31,24 +31,14 @@ npm test             # 纯函数层单元测试
 
 1. **仓库必须公开**（Settings → General → 拉到底 Danger Zone → Change visibility
    → Public）。GitHub Pages 对免费账号的私有仓库不可用，升级 Pro 可解锁。
+   ⚠️ 确认时 GitHub 要求**手动输入仓库名**（`caicaiming/facestudio`）才允许
+   点按钮 —— 只点了下拉没输入名字，可见性不会变。
 2. Settings → Pages → Build and deployment → Source 选 **GitHub Actions**。
 3. 推送一次（或到 Actions 页手动 Run workflow），完成后访问
    `https://<用户名>.github.io/facestudio/`。
 
 路径适配已做好：`vite.config.js` 用相对 base，模型 URL 走
 `import.meta.env.BASE_URL`，仓库改名 / 换自定义域名都不用改代码。
-
-### 路线 B：GitHub Codespaces（仓库保持私有）
-
-仓库已带 `.devcontainer/devcontainer.json`。仓库页 → 绿色 Code 按钮 →
-Codespaces 标签 → Create codespace，容器就绪后（自动 npm install）在终端：
-
-```bash
-npm run dev
-```
-
-5173 端口会自动转发并弹出预览，得到一个 `https://<随机串>.app.github.dev`
-的网址，本机不用装 Node。免费账号每月 120 核时额度，够用。
 
 ### 部署验证（本地模拟）
 
@@ -64,6 +54,22 @@ node scripts/verify-pages.mjs
 输出「✅ 子路径部署全链路通过」即为可部署状态。
 （别用 `python -m http.server` 代替第一步：Windows 下它把 .js 发成
 `text/plain`，浏览器拒绝执行模块脚本，会得到假失败。）
+
+同一个脚本也能直接验**线上站点**（自动放宽等待、容忍公网延迟）：
+
+```bash
+VERIFY_BASE=https://<用户名>.github.io/facestudio/ node scripts/verify-pages.mjs
+```
+
+线上排查另有 `scripts/diag-online.mjs`：逐条打印模型文件加载、状态文案
+时间线与所有 ≥400 的请求，适合「站点开了但功能不对」的场景。
+
+注意两点（2026-09 实测）：
+- 公网**首访**有 CDN 冷启动，模型加载可能要 20–30 秒，之后就走缓存了；
+  自动化验证务必等「就绪」再上传，否则 face-api 会抛
+  `load model before inference` 造成假失败（上传入口在模型就绪前本来就是禁用的）。
+- 点位与编号画在 **mesh 层**、overlay 层只承载选中/拖点提示 ——
+  校验脚本看的是这两层合并的内容，别只盯 overlay。
 
 ## 使用流程
 
