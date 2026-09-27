@@ -111,6 +111,7 @@ export default function ZonePanel({
   onResetAll,
   onHighlight,
   disabled = false,
+  defaultCollapsed = false,
 }) {
   // P0 分区（眶周 / 颧颊 / 鼻 / 颏）默认展开：医美最高频
   const [open, setOpen] = useState(() => {
@@ -118,7 +119,12 @@ export default function ZonePanel({
     for (const z of SITE_ZONES) o[z.key] = z.lever === 'P0'
     return o
   })
-  const [showDetail, setShowDetail] = useState(true)
+  // 默认收起：全部 25 个部位的说明与参考剂量展开后近千像素，
+  // 会把下面的参数面板挤出好几屏。它是查阅资料，不是日常操作项。
+  const [showDetail, setShowDetail] = useState(false)
+  // 整个面板可折叠：与亚单位面板同为「局部形变」的入口，
+  // 同时展开会把左栏拉长到三四屏。折叠后仅留标题行，一键展开。
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   const activeList = SITES.filter((s) => values[s.key])
   const active = activeList.length
@@ -137,9 +143,18 @@ export default function ZonePanel({
   }
 
   return (
-    <div className="subunit-block zone-block">
+    <div className={`subunit-block zone-block${collapsed ? ' collapsed' : ''}`}>
       <div className="subunit-head">
-        <span className="subunit-title">医美部位</span>
+        <button
+          type="button"
+          className="subunit-toggle"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          title={collapsed ? '展开面板' : '收起面板'}
+        >
+          <span className="su-caret">{collapsed ? '▸' : '▾'}</span>
+          <span className="subunit-title">医美部位</span>
+        </button>
         <span className={`subunit-badge ${active ? 'on' : ''}`}>
           {active ? `${active} 个部位` : '未设定'}
         </span>
@@ -164,12 +179,13 @@ export default function ZonePanel({
         </button>
       </div>
 
-      <p className="note">
-        ＋ 为填充 / 外扩，− 为收紧 / 内收。悬停部位名会在主图高亮该部位的作用点。
-        {scale?.ok ? '幅度已换算为毫米（瞳距估算）。' : '当前无法换算毫米。'}
-      </p>
+      <div className="subunit-body" hidden={collapsed}>
+        <p className="note">
+          ＋ 为填充 / 外扩，− 为收紧 / 内收。悬停部位名会在主图高亮该部位的作用点。
+          {scale?.ok ? '幅度已换算为毫米（瞳距估算）。' : '当前无法换算毫米。'}
+        </p>
 
-      {SITE_ZONES.map((z) => {
+        {SITE_ZONES.map((z) => {
         const list = sitesOf(z.key)
         const n = activeIn(z.key)
         return (
@@ -270,9 +286,10 @@ export default function ZonePanel({
           ))}
         </ul>
       )}
-      <p className="note">
-        共 {SITES.length} 个部位。项目与剂量仅用于沟通示意，实际方案须由执业医师面诊确定。
-      </p>
+        <p className="note">
+          共 {SITES.length} 个部位。项目与剂量仅用于沟通示意，实际方案须由执业医师面诊确定。
+        </p>
+      </div>
     </div>
   )
 }

@@ -1216,7 +1216,10 @@ export default function App() {
           />
 
           {/* ---------------- 亚单位精调 ---------------- */}
+          {/* 默认折叠：医美部位与亚单位是「局部形变」的两套入口，
+              同时展开会把左栏拉到三四屏。需要精细微调时点标题展开。 */}
           <SubunitPanel
+            defaultCollapsed
             values={subunitValues}
             disabled={!points}
             onChange={(key, v) => {

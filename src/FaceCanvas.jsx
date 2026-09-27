@@ -654,6 +654,9 @@ export default function FaceCanvas({
   /** 供指针事件触发重绘（hover 高亮不进 React state，避免每次移动都重渲染） */
   const scheduleRef = useRef(() => {})
   const [imgReady, setImgReady] = useState(false)
+  /** 图片显示尺寸（CSS px）：由 JS 按容器可用空间算出，null 表示还没测出来 */
+  const [fit, setFit] = useState(null)
+  const fitRafRef = useRef(0)
 
   // ---- 缩放 / 放大镜 ----
   // zoom 同时存 ref 与 state：ref 供 wheel / 拖拽等原生回调读取最新值，
@@ -673,6 +676,61 @@ export default function FaceCanvas({
   /** 指针当前位置的自然像素坐标，放大镜每次重绘都以此为中心 */
   const pointerNatRef = useRef(null)
   const lensRafRef = useRef(0)
+
+  /**
+   * 图片显示尺寸 = 容器可用空间的 contain 结果。
+   *
+   * 原来只写 `width:100%; height:auto` —— 尺寸由宽度单方面决定，于是中栏
+   * 一旦被左右栏撑高，图片下方就空出一大片。改为按【可用宽高中较小者】
+   * 等比缩放，把可用高度也用起来。
+   *
+   * 上限取 1（不插值放大）：放大出来的像素并不存在，点位看着对齐了，
+   * 实际是插值糊出来的，会误导微调判断 —— 宁可留白。
+   *
+   * wrap 尺寸严格等于图片显示尺寸，这一点很关键：三个 canvas 层用 inset:0
+   * 覆盖 wrap，而 canvas 的像素尺寸是图片自然尺寸，两者必须同框，
+   * 叠加层才不会错位。toNatural / hitTest 读的是 img 的 rect，同样不受影响。
+   */
+  useEffect(() => {
+    const wrap = wrapRef.current
+    const box = wrap?.parentElement
+    if (!wrap || !box) return
+
+    const measure = () => {
+      const img = imgRef.current
+      if (!img || !img.naturalWidth || !img.naturalHeight) {
+        setFit(null)
+        return
+      }
+      const cs = getComputedStyle(box)
+      const availW =
+        box.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)
+      const availH =
+        box.clientHeight - parseFloat(cs.paddingTop || 0) - parseFloat(cs.paddingBottom || 0)
+      if (!(availW > 0) || !(availH > 0)) return
+      const nw = img.naturalWidth
+      const nh = img.naturalHeight
+      const s = Math.min(availW / nw, availH / nh, 1)
+      const w = Math.max(1, Math.round(nw * s))
+      const h = Math.max(1, Math.round(nh * s))
+      // 亚像素抖动时保持原对象，避免无意义的重渲染
+      setFit((prev) => (prev && Math.abs(prev.w - w) < 1 && Math.abs(prev.h - h) < 1 ? prev : { w, h }))
+    }
+
+    measure()
+    const ro = new ResizeObserver(() => {
+      if (fitRafRef.current) return
+      fitRafRef.current = requestAnimationFrame(() => {
+        fitRafRef.current = 0
+        measure()
+      })
+    })
+    ro.observe(box)
+    return () => {
+      ro.disconnect()
+      if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current)
+    }
+  }, [imageSrc, imgReady])
 
   // 换图：清空加载态与纹理缓存
   useEffect(() => {
@@ -816,6 +874,8 @@ export default function FaceCanvas({
     activeAnchor,
     // 缩放改变显示宽度 → k 变 → 标记必须按新尺度重绘
     zoom,
+    // 容器可用空间变化 → 显示尺寸变 → k 变，同上
+    fit,
   ])
 
   // ---------------------------------------------------------------- 缩放 / 放大镜
@@ -845,7 +905,7 @@ export default function FaceCanvas({
   useEffect(() => {
     clampPan()
     applyTransform()
-  }, [zoom, imageSrc, imgReady])
+  }, [zoom, imageSrc, imgReady, fit])
 
   /** 放大镜定位：跟随指针，靠边翻转到另一侧，且始终不越出画布边界 */
   const placeLens = (clientX, clientY) => {
@@ -1168,6 +1228,7 @@ export default function FaceCanvas({
     <div
       className={`canvas-wrap${addMode ? ' add-mode' : ''}${className ? ` ${className}` : ''}`}
       ref={wrapRef}
+      style={fit ? { width: fit.w, height: fit.h } : { height: '100%' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}

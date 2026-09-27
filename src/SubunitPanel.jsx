@@ -112,6 +112,7 @@ export default function SubunitPanel({
   onResetAll,
   onHighlight,
   disabled = false,
+  defaultCollapsed = false,
 }) {
   // P0 分区默认展开：杠杆最高、最常用；其余折叠，避免面板过长
   const [open, setOpen] = useState(() => {
@@ -120,6 +121,9 @@ export default function SubunitPanel({
     return o
   })
   const [showNotes, setShowNotes] = useState(false)
+  // 整个面板可折叠：它与医美部位面板同为「局部形变」两套入口，
+  // 同时展开会把左栏拉到三四屏。折叠后只剩标题行，一键即可展开。
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   const active = activeCountOf(values)
   const activeIn = (zoneKey) =>
@@ -129,9 +133,18 @@ export default function SubunitPanel({
   const allOpen = ZONES.every((z) => open[z.key])
 
   return (
-    <div className="subunit-block">
+    <div className={`subunit-block${collapsed ? ' collapsed' : ''}`}>
       <div className="subunit-head">
-        <span className="subunit-title">亚单位精调</span>
+        <button
+          type="button"
+          className="subunit-toggle"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          title={collapsed ? '展开面板' : '收起面板'}
+        >
+          <span className="su-caret">{collapsed ? '▸' : '▾'}</span>
+          <span className="subunit-title">亚单位精调</span>
+        </button>
         <span className={`subunit-badge ${active ? 'on' : ''}`}>
           {active ? `${active} 项已调整` : '未调整'}
         </span>
@@ -156,11 +169,12 @@ export default function SubunitPanel({
         </button>
       </div>
 
-      <p className="note">
-        按美学分区做局部推拉，＋/− 每次 1 档，按住可连续步进。悬停行名会在主图高亮对应点位。
-      </p>
+      <div className="subunit-body" hidden={collapsed}>
+        <p className="note">
+          按美学分区做局部推拉，＋/− 每次 1 档，按住可连续步进。悬停行名会在主图高亮对应点位。
+        </p>
 
-      {ZONES.map((z) => {
+        {ZONES.map((z) => {
         const list = subunitsOf(z.key)
         const n = activeIn(z.key)
         return (
@@ -236,9 +250,10 @@ export default function SubunitPanel({
           ))}
         </ul>
       )}
-      <p className="note">
-        共 {SUBUNITS.length} 个可形变亚单位，均按面宽归一，跨分辨率手感一致。
-      </p>
+        <p className="note">
+          共 {SUBUNITS.length} 个可形变亚单位，均按面宽归一，跨分辨率手感一致。
+        </p>
+      </div>
     </div>
   )
 }

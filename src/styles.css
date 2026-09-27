@@ -34,10 +34,15 @@ body {
   line-height: 1.6;
 }
 
+/* 全屏工作台：整页不滚动，三栏各自独立滚动。
+   为什么不能整页滚 —— 左右栏工具面板展开后可达数千像素，整页滚动时
+   画布会随之上移出视口，只留下大片空白；调滑块/拖点位要来回滚动，
+   参照物与操作区割裂。改为三栏各自滚动后，画布恒定在视口内。 */
 .app {
-  min-height: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* ---------------------------------------------------------------- 顶栏 */
@@ -162,30 +167,55 @@ body {
 
 .layout {
   flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 260px 1fr 300px;
   gap: 16px;
   padding: 16px 20px;
-  align-items: start;
+  /* stretch 而非 start：三栏撑满视口高度，才能各自形成滚动容器 */
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 14px;
   box-shadow: var(--shadow);
 }
 
+/* 左右栏：内容超长时在栏内滚动，不牵动整页。
+   min-height:0 是必需的 —— grid/flex 子项默认 min-height:auto，
+   会被内容撑开而拒绝收缩，滚动容器就形同虚设。 */
 .col-left,
 .col-right {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.col-left::-webkit-scrollbar,
+.col-right::-webkit-scrollbar {
+  width: 8px;
+}
+
+.col-left::-webkit-scrollbar-thumb,
+.col-right::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #2c2c34;
+}
+
+.col-left::-webkit-scrollbar-thumb:hover,
+.col-right::-webkit-scrollbar-thumb:hover {
+  background: #3a3a44;
 }
 
 .card-title {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-dim);
@@ -195,7 +225,7 @@ body {
 /* ---------------------------------------------------------------- 滑块 */
 
 .slider-row {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .slider-head {
@@ -315,15 +345,16 @@ body {
 
 .note {
   font-size: 11px;
+  line-height: 1.5;
   color: var(--text-dim);
-  margin: 10px 0 0;
+  margin: 8px 0 0;
 }
 
 /* ---------------------------------------------------------------- 逐点微调 */
 
 .card-title.sub {
-  margin-top: 22px;
-  padding-top: 16px;
+  margin-top: 16px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 
@@ -657,6 +688,8 @@ body {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .toolbar {
@@ -705,25 +738,32 @@ body {
  * 窄屏不下沉为纵向堆叠——上下排布时，调左栏滑块要抬头看图、再低头找点位，
  * 操作割裂。改为压缩侧栏与间距来保住中栏宽度，让两张图始终横向对照。
  */
+/* flex:1 + min-height:0 —— 画布吃掉中栏剩余的全部高度。
+   图片尺寸再由 JS 按这个可用高度 fit（见 FaceCanvas），
+   于是「图片下方的大片空白」被彻底消除。 */
 .canvas-duo {
+  flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   min-width: 0;
+  min-height: 0;
 }
 
 .canvas-box {
   position: relative;
-  min-height: 70vh;
+  height: 100%;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 12px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .canvas-duo .canvas-box {
-  min-height: 60vh;
+  min-height: 0;
 }
 
 /* 面板角标：区分「原始」与「调整后预览」 */
@@ -747,6 +787,9 @@ body {
   color: #bfdbfe;
 }
 
+/* 尺寸由 JS 按可用空间算好后写到 inline style（见 FaceCanvas 的 fit 逻辑）。
+   宽高严格等于图片的显示尺寸 → 三个 canvas 层（inset:0）与 img 完全重合，
+   命中测试与坐标换算才不会错位。 */
 .canvas-wrap {
   position: relative;
   width: 100%;
@@ -755,7 +798,7 @@ body {
 
 .canvas-wrap img {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
   border-radius: 8px;
 }
@@ -775,7 +818,8 @@ body {
 
 .canvas-empty {
   width: 100%;
-  min-height: 60vh;
+  height: 100%;
+  min-height: 200px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1101,14 +1145,35 @@ body {
   }
 }
 
+/* 视口不足 1200px 时退回整页滚动：
+   右栏要下沉到第二行，而全屏容器的高度是锁死的，下沉的部分会被裁掉看不见。
+   与其藏起来，不如让整页正常滚动。 */
 @media (max-width: 1199px) {
+  .app {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
   .layout {
     grid-template-columns: 232px 1fr;
+    grid-auto-rows: auto;
+    overflow: visible;
+  }
+  .col-left,
+  .col-right,
+  .col-center {
+    overflow: visible;
   }
   .col-right {
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+  .canvas-duo {
+    flex: none;
+  }
+  .canvas-duo .canvas-box {
+    min-height: 52vh;
   }
 }
 
@@ -1184,16 +1249,53 @@ body {
 
 /* ------------------------------------------------- 亚单位精调 */
 .subunit-block {
-  margin-top: 18px;
-  padding-top: 14px;
+  margin-top: 14px;
+  padding-top: 10px;
   border-top: 1px dashed var(--border);
 }
 
+/* 面板标题吸顶：左栏要滚好几屏，滚到中段就不知道自己停在哪一组面板里了。
+   背景必须不透明，否则下方内容会从标题底下透出来。 */
 .subunit-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 6px;
+  padding: 2px 0;
+  background: var(--card);
+}
+
+/* 面板级折叠开关（点标题收起／展开整个面板） */
+.subunit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.subunit-toggle:hover .subunit-title {
+  color: var(--accent);
+}
+
+/* 折叠态只留标题与状态徽标，操作按钮随内容一起隐藏 */
+.subunit-block.collapsed .subunit-head .btn-mini {
+  display: none;
+}
+
+/* 右栏同理：滚动长卡片时当前卡片的标题吸在顶部 */
+.col-right > .card > .card-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
 }
 
 .subunit-title {
@@ -1746,6 +1848,9 @@ body {
 .canvas-zoom {
   position: relative;
   width: 100%;
+  /* 高度必须 100%（而非 auto）：img 的 height:100% 以它为基准，
+     若它是 auto 就会退化成图片原始高度，wrap 的 fit 尺寸便失效 */
+  height: 100%;
   transform-origin: 0 0;
   will-change: transform;
 }
