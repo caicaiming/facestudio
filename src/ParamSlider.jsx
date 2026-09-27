@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { SLIDER_TRAVEL, hitSliderThumb, sliderTravelToValue } from './drag.js'
 
 /** 由 step 推断显示精度，避免出现 0.30000000000000004 这类浮点尾巴 */
 function decimalsOf(step) {
@@ -41,6 +42,11 @@ export default function ParamSlider({
   const fmt = (v) => (Number.isFinite(v) ? v.toFixed(dec) : '0')
   const [text, setText] = useState(() => fmt(value))
   const inputRef = useRef(null)
+  const rangeRef = useRef(null)
+  /** 相对拖动的现场：按下时的值与坐标 */
+  const dragRef = useRef(null)
+  /** 最近一次实际派发的值（window 上的监听读不到最新 props） */
+  const emittedRef = useRef(value)
 
   // 焦点在本框内时不跟随外部值（保护键入中间态）；其余情况一律同步，
   // 保证画布拖拽等操作产生的外部变化能如实反映到数字框。
@@ -73,6 +79,55 @@ export default function ParamSlider({
     setText(fmt(v))
     if (v !== value) onChange(v)
   }
+
+  /**
+   * 滑块接管为【相对拖动】。
+   *
+   * 原生 range 是位置映射：拖到轨道 80% 处就是 80% 的值，与鼠标走了多远无关。
+   * 在 ±15 的窄量程 + 约 180px 的轨道上，这等于每 6px 跳一档，一抖就到底。
+   * 改为相对位移后，默认要拖 2.2 倍轨道宽度才走完整量程，按住 Shift 再降到
+   * 约 1/4 —— 手感上有明确的「阻力」。
+   *
+   * 只在【按下点确实落在滑块上】时接管；点在轨道其他位置时保持原生行为
+   * （直接跳到该位置），否则用户会觉得「点中间怎么没反应」。
+   */
+  const onRangePointerDown = (e) => {
+    if (disabled || e.button != null && e.button !== 0) return
+    const el = rangeRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    if (!hitSliderThumb(e.clientX, rect, value, { min, max })) return
+
+    dragRef.current = { x: e.clientX, v: value, rect: el.getBoundingClientRect() }
+    emittedRef.current = value
+    el.focus()
+    e.preventDefault()
+
+    const onMove = (ev) => {
+      const d = dragRef.current
+      if (!d) return
+      const next = sliderTravelToValue(d.v, ev.clientX - d.x, d.rect.width, { min, max, step }, {
+        fine: ev.shiftKey,
+      })
+      if (next !== emittedRef.current) {
+        emittedRef.current = next
+        onChange(next)
+      }
+    }
+    const onUp = () => {
+      dragRef.current = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  useEffect(() => () => {
+    dragRef.current = null
+  }, [])
 
   const zeroPos = ((0 - min) / (max - min)) * 100
   const valPos = ((value - min) / (max - min)) * 100
@@ -136,6 +191,7 @@ export default function ParamSlider({
           style={{ left: `${left}%`, width: `${width}%` }}
         />
         <input
+          ref={rangeRef}
           type="range"
           min={min}
           max={max}
@@ -143,8 +199,10 @@ export default function ParamSlider({
           value={value}
           disabled={disabled}
           aria-label={label}
+          title={`拖动调 ${label}（按住 Shift 精调）`}
           onChange={(e) => onChange(Number(e.target.value))}
           onDoubleClick={() => onReset?.()}
+          onPointerDown={onRangePointerDown}
         />
       </div>
       {hint && <div className="slider-hint">{hint}</div>}

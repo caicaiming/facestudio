@@ -1174,6 +1174,7 @@ export default function App() {
               </div>
               <p className="note">
                 已调整 <strong>{adjustedCount}</strong> 个点。也可直接在照片上拖动点位（切到「点位」叠加层更好点选）。
+                拖动时右上角可调灵敏度，默认½阻尼；按住 <kbd>Shift</kbd> 最精细（¼）、按住 <kbd>Alt</kbd> 临时跟手。
               </p>
             </>
           ) : (
@@ -1351,6 +1352,7 @@ export default function App() {
                 onAnchorDrag={dragAnchor}
                 onAnchorSelect={setActiveAnchor}
                 activeAnchor={activeAnchor}
+                mmPerPixel={scale?.ok ? scale.mmPerPixel : 0}
               />
             </div>
 

@@ -1919,6 +1919,65 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.note kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel, rgba(255, 255, 255, 0.06));
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+/* ---- 拖动灵敏度 / 读数 ---- */
+.ct-gain {
+  align-items: center;
+  padding-right: 2px;
+  border-right: 1px solid var(--border);
+}
+
+.ct-label {
+  padding: 0 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.ct-gain-btn {
+  min-width: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 拖动读数浮层：显示本次累计位移，别让用户靠肉眼猜拖了多少 */
+.drag-readout {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 7px;
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  border-radius: 6px;
+  background: rgba(10, 10, 14, 0.9);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.drag-readout b {
+  font-weight: 600;
+}
+
+.drag-readout span {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
 .canvas-loupe {
   position: absolute;
   z-index: 5;

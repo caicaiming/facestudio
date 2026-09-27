@@ -37,8 +37,12 @@ console.log(`✓ 逐点面板存在：${groupInfo.count} 个下拉，「全部�
 // ---- 2. 选点 + 拖 X/Y 滑块，检查照片像素变化 ----
 const diffFromOriginal = () =>
   page.evaluate(() => {
-    const wc = document.querySelector('canvas.warp')
-    const img = document.querySelector('.canvas-wrap img')
+    // ⚠️ 必须取【预览区】的 warp 画布：主图 FaceCanvas 的 warp 层是 hidden 的
+    // （showWarp=false，overlay 才是它的职责），拿它来比得到的是「空画布 vs
+    // 原图」的恒定值 —— 无论怎么调，差值都不动，断言会永远通过或永远失败。
+    const wraps = [...document.querySelectorAll('.canvas-wrap')]
+    const wc = wraps[1]?.querySelector('canvas.warp') || document.querySelector('canvas.warp')
+    const img = wc?.closest('.canvas-wrap')?.querySelector('img')
     if (!wc || !img) return null
     const c = document.createElement('canvas')
     c.width = wc.width

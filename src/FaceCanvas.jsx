@@ -25,6 +25,7 @@ import { TRIANGLES } from './triangles.js'
 import { RIGHT_HALF, LEFT_HALF, fitLine, mirrorPoint } from './measure.js'
 import { createWarper } from './warp.js'
 import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
+import { DRAG_GAINS, DEFAULT_DRAG_GAIN_KEY, dampDelta, effectiveGain } from './drag.js'
 
 /** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
 const MAX_EDGE = 1600
@@ -38,6 +39,26 @@ const MAX_EDGE = 1600
  * 降分辨率后肉眼无差别。
  */
 const OVERLAY_MAX_AREA = 12e6
+
+/** 拖动灵敏度在本地记忆，免得每次刷新都要重选 */
+const DRAG_GAIN_STORE_KEY = 'face-studio:drag-gain'
+const loadGainKey = () => {
+  try {
+    const v = localStorage.getItem(DRAG_GAIN_STORE_KEY)
+    if (v && DRAG_GAINS.some((g) => g.key === v)) return v
+  } catch {
+    /* 隐私模式下 localStorage 会抛异常，忽略即可 */
+  }
+  return DEFAULT_DRAG_GAIN_KEY
+}
+
+/**
+ * 单次 pointermove 允许的最大位移上限，取图片短边的 6%。
+ *
+ * 浏览器在高负载时会丢帧，触摸板还有惯性滚动，二者都可能让一帧的坐标跳
+ * 出几十像素。没有这道闸的话，一次卡顿就能把半个下巴甩到太阳穴上去。
+ */
+const MAX_STEP_RATIO = 0.06
 
 /** 空态默认文案 */
 const EMPTY = {
@@ -647,6 +668,8 @@ export default function FaceCanvas({
   className = '',
   /** 是否显示缩放 / 放大镜工具条（预览区同样需要放大看形变细节） */
   tools = true,
+  /** 毫米换算系数（mmPerPixel）：>0 时拖动读数额外给出毫米值 */
+  mmPerPixel = 0,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   const warpOn = showWarp ?? view === 'adjustment'
@@ -686,6 +709,25 @@ export default function FaceCanvas({
   /** 指针当前位置的自然像素坐标，放大镜每次重绘都以此为中心 */
   const pointerNatRef = useRef(null)
   const lensRafRef = useRef(0)
+
+  // ---- 拖动灵敏度 ----
+  // ref 供原生 pointer 回调读最新值（这些回调只在挂载时绑定一次）
+  const [dragGain, setDragGain] = useState(loadGainKey)
+  const dragGainRef = useRef(dragGain)
+  /** 拖动读数：给「到底拖了多少」一个明确的数字，避免凭感觉瞎拖 */
+  const [readout, setReadout] = useState(null)
+  const readoutTimerRef = useRef(0)
+  useEffect(() => () => clearTimeout(readoutTimerRef.current), [])
+
+  const pickDragGain = (key) => {
+    dragGainRef.current = key
+    setDragGain(key)
+    try {
+      localStorage.setItem(DRAG_GAIN_STORE_KEY, key)
+    } catch {
+      /* 存不了也不影响使用 */
+    }
+  }
 
   /**
    * 图片显示尺寸 = 容器可用空间的 contain 结果。
@@ -1192,7 +1234,8 @@ export default function FaceCanvas({
       return
     }
     e.preventDefault()
-    dragRef.current = { kind: hit.kind, id: hit.id, lastX: p.x, lastY: p.y }
+    // acc 记录本次拖动累计施加的位移（natural px），用于读数
+    dragRef.current = { kind: hit.kind, id: hit.id, lastX: p.x, lastY: p.y, accX: 0, accY: 0 }
     e.currentTarget.style.cursor = 'grabbing'
     if (hit.kind === 'anchor') onAnchorSelect?.(hit.id)
     else onPointSelect?.(hit.id)
@@ -1215,14 +1258,44 @@ export default function FaceCanvas({
     if (!p) return
     const d = dragRef.current
     if (d) {
-      // 上报相对上一次移动的增量，由上层累加到该点既有位移上
-      const dx = p.x - d.lastX
-      const dy = p.y - d.lastY
+      // 上报相对上一次移动的增量，由上层累加到该点既有位移上。
+      //
+      // ⚠️ 这里的位移已从【屏幕】换算成【原图像素】（toNatural），倍率可达数倍
+      // 乃至十倍 —— 手抖 3px 落在 4000px 宽的原图上就是 8px 以上，高分辨率图
+      // 尤其明显。因此上报前先过一遍阻尼：默认只施加一半，按住 Shift 降到 ¼，
+      // 按住 Alt 提到跟手。
+      const rawX = p.x - d.lastX
+      const rawY = p.y - d.lastY
+      // lastX/lastY 记的是【光标真实位置】而非施加后的位置，否则增益会
+      // 逐帧复利，拖到后面完全拖不动。
       d.lastX = p.x
       d.lastY = p.y
-      if (dx || dy) {
-        if (d.kind === 'anchor') onAnchorDrag?.(d.id, dx, dy)
-        else onPointDrag?.(d.id, dx, dy)
+      if (!rawX && !rawY) return
+
+      const img = imgRef.current
+      const limit = Math.min(img?.naturalWidth || 0, img?.naturalHeight || 0) * MAX_STEP_RATIO
+      const r = dampDelta(rawX, rawY, {
+        gain: effectiveGain(dragGainRef.current, { shift: e.shiftKey, alt: e.altKey }),
+        maxStep: limit > 0 ? limit : 0,
+      })
+      if (r.skipped) return
+
+      d.accX += r.dx
+      d.accY += r.dy
+      if (d.kind === 'anchor') onAnchorDrag?.(d.id, r.dx, r.dy)
+      else onPointDrag?.(d.id, r.dx, r.dy)
+
+      // 读数浮层：告诉用户这一拖到底施加了多少，别再靠肉眼猜
+      const wrap = wrapRef.current
+      if (wrap) {
+        const wr = wrap.getBoundingClientRect()
+        setReadout({
+          x: e.clientX - wr.left,
+          y: e.clientY - wr.top,
+          dx: d.accX,
+          dy: d.accY,
+          fine: e.shiftKey,
+        })
       }
       return
     }
@@ -1247,6 +1320,9 @@ export default function FaceCanvas({
     if (dragRef.current) {
       dragRef.current = null
       if (wrapRef.current) wrapRef.current.style.cursor = 'default'
+      // 拖完再留一小会儿，让人看清最终数值；随之自动淡出
+      if (readoutTimerRef.current) clearTimeout(readoutTimerRef.current)
+      readoutTimerRef.current = setTimeout(() => setReadout(null), 900)
     }
     if (hoverRef.current !== -1) {
       hoverRef.current = -1
@@ -1304,6 +1380,25 @@ export default function FaceCanvas({
 
       {tools && imageSrc && (
         <div className="canvas-tools">
+          {interactive && (
+            <div
+              className="ct-group ct-gain"
+              title="拖动灵敏度：数字越小越重手。按住 Shift 临时最精细（¼），按住 Alt 临时跟手（1×）"
+            >
+              <span className="ct-label">拖动</span>
+              {DRAG_GAINS.map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  className={`ct-btn ct-gain-btn${dragGain === g.key ? ' active' : ''}`}
+                  onClick={() => pickDragGain(g.key)}
+                  title={g.title}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          )}
           <button
             type="button"
             className={`ct-btn${loupeOn ? ' active' : ''}`}
@@ -1355,6 +1450,25 @@ export default function FaceCanvas({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 拖动读数：跟着光标显示本次累计位移（px + 毫米）。
+          它必须在 wrap 内部才能用相对坐标定位，且绝不能吃掉指针事件。 */}
+      {readout && (
+        <div
+          className="drag-readout"
+          style={{ left: readout.x, top: readout.y, transform: 'translate(14px, -50%)' }}
+        >
+          <b>
+            {readout.dx >= 0 ? '→' : '←'} {Math.abs(readout.dx).toFixed(1)}
+            {readout.dy >= 0 ? ' ↓' : ' ↑'} {Math.abs(readout.dy).toFixed(1)} px
+          </b>
+          <span>
+            总位移 {Math.hypot(readout.dx, readout.dy).toFixed(1)}px
+            {mmPerPixel > 0 && ` · ≈${(Math.hypot(readout.dx, readout.dy) * mmPerPixel).toFixed(1)}mm`}
+            {readout.fine && ' · 精细'}
+          </span>
         </div>
       )}
 

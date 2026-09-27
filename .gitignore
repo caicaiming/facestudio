@@ -7,3 +7,6 @@ dist/
 # 根目录临时截图（冒烟/诊断产物，一律以下划线开头）
 _*.png
 smoke-*.png
+pointedit.png
+_medical-zones.png
+_zoom-*.png
