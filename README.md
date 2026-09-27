@@ -20,6 +20,51 @@ npm run preview      # 预览生产构建
 npm test             # 纯函数层单元测试
 ```
 
+## 部署到 GitHub
+
+项目是纯静态站点（构建产物约 3.6MB，含模型权重），有两条在线运行的路：
+
+### 路线 A：GitHub Pages（要一个公开网址）
+
+仓库已带自动部署工作流 `.github/workflows/deploy-pages.yml`：每次推送到 main
+自动跑「安装 → 单测 → 构建 → 发布」，全程约 1 分钟。开启只需一次：
+
+1. **仓库必须公开**（Settings → General → 拉到底 Danger Zone → Change visibility
+   → Public）。GitHub Pages 对免费账号的私有仓库不可用，升级 Pro 可解锁。
+2. Settings → Pages → Build and deployment → Source 选 **GitHub Actions**。
+3. 推送一次（或到 Actions 页手动 Run workflow），完成后访问
+   `https://<用户名>.github.io/facestudio/`。
+
+路径适配已做好：`vite.config.js` 用相对 base，模型 URL 走
+`import.meta.env.BASE_URL`，仓库改名 / 换自定义域名都不用改代码。
+
+### 路线 B：GitHub Codespaces（仓库保持私有）
+
+仓库已带 `.devcontainer/devcontainer.json`。仓库页 → 绿色 Code 按钮 →
+Codespaces 标签 → Create codespace，容器就绪后（自动 npm install）在终端：
+
+```bash
+npm run dev
+```
+
+5173 端口会自动转发并弹出预览，得到一个 `https://<随机串>.app.github.dev`
+的网址，本机不用装 Node。免费账号每月 120 核时额度，够用。
+
+### 部署验证（本地模拟）
+
+上线前可在本地复刻 Pages 的子路径环境做全链路验证：
+
+```bash
+npm run build
+rm -rf /tmp/pages-sim && mkdir -p /tmp/pages-sim/facestudio && cp -r dist/. /tmp/pages-sim/facestudio/
+node scripts/static-server.mjs /tmp/pages-sim 8082   # 另开终端保持运行
+node scripts/verify-pages.mjs
+```
+
+输出「✅ 子路径部署全链路通过」即为可部署状态。
+（别用 `python -m http.server` 代替第一步：Windows 下它把 .js 发成
+`text/plain`，浏览器拒绝执行模块脚本，会得到假失败。）
+
 ## 使用流程
 
 1. 打开页面，等待右上角状态变为**就绪**（首次需加载模型权重）

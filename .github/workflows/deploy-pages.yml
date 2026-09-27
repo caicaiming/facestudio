@@ -1,0 +1,66 @@
+# 构建并部署到 GitHub Pages
+#
+# 触发：推送到 main，或在 Actions 页手动点「Run workflow」。
+# 产物：dist/（纯静态，含 public/ 下的模型权重与样张）
+#
+# 前置条件（只需做一次，见 README「部署到 GitHub」）：
+#   仓库 Settings → Pages → Source 选 "GitHub Actions"。
+#   注意：免费账号的【私有】仓库不支持 Pages，需转为公开或升级套餐。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # 允许在 Actions 页手动触发（改配置后不必再造一次提交）
+  workflow_dispatch:
+
+# 同一分支的多次推送只保留最新一次在跑，旧的自动取消，避免部署互相覆盖
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 安装依赖
+        # ci 而非 install：严格按 lock 文件装，避免依赖漂移导致线上与本地不一致
+        run: npm ci
+
+      - name: 单元测试
+        # 部署前卡一道：纯函数层挂了就不发布
+        run: npm test
+
+      - name: 构建
+        run: npm run build
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署
+        id: deployment
+        uses: actions/deploy-pages@v4

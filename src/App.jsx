@@ -34,6 +34,16 @@ import { buildPlan, mmScale } from './aesthetic.js'
 import ZonePanel from './ZonePanel.jsx'
 import PlanPanel from './PlanPanel.jsx'
 
+/**
+ * 模型权重目录。
+ *
+ * 必须跟随部署 base 走，不能硬编码 '/models'：GitHub Pages 部署在子路径
+ * `https://<user>.github.io/<repo>/` 下，绝对路径会请求到站点根域而 404。
+ * `import.meta.env.BASE_URL` 由 Vite 在构建期按 `base` 静态替换
+ * （dev 为 '/'、相对 base 为 './'、子路径 base 为 '/<repo>/'），三种场景都成立。
+ */
+const MODEL_URL = `${import.meta.env.BASE_URL}models`
+
 /** 自定义控制点位移范围（图片自然像素） */
 const CUSTOM_OFFSET_RANGE = 60
 
@@ -187,8 +197,8 @@ export default function App() {
         setBackend(b)
         const faceapi = faceapiRef.current
         return Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-          faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
         ])
       })
       .then(() => {
