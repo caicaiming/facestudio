@@ -60,6 +60,7 @@ import {
   materialUrl,
 } from './materials.js'
 import { loadCustomPhrases, saveCustomPhrases } from './phrases.js'
+import { fitPanels, loadPanels, savePanels } from './annPanels.js'
 
 /**
  * 模型权重目录。
@@ -227,6 +228,22 @@ export default function App() {
   /** 四个标注板块各自的折叠状态：默认只开「工具」，其余按需展开，不白占画面高度 */
   const [annFold, setAnnFold] = useState({ tools: false, materials: true, layers: true, phrases: true })
   const toggleAnnFold = useCallback((k) => setAnnFold((f) => ({ ...f, [k]: !f[k] })), [])
+  /**
+   * 四个面板的浮窗状态：是否浮出 + 位置尺寸（跨会话记忆）。
+   * 侧栏宽度是固定的，素材缩略图 / 话术列表挤在里面看不清也翻不动 ——
+   * 浮出来自己调大小，比加宽侧栏挤画布划算。
+   */
+  const [annPanels, setAnnPanels] = useState(() => loadPanels())
+  const setPanelWin = useCallback((k, patch) => {
+    setAnnPanels((p) => ({ ...p, [k]: { ...p[k], ...patch } }))
+  }, [])
+  const togglePanelFloat = useCallback((k) => {
+    setAnnPanels((p) => ({ ...p, [k]: { ...p[k], float: !p[k].float } }))
+    // 浮出的同时把折叠打开，免得收回侧栏后是个收起状态
+    setAnnFold((f) => (f[k] ? { ...f, [k]: false } : f))
+  }, [])
+  /** 专注模式：隐藏左右栏，画布占满 —— 小屏下照片才有得看 */
+  const [focus, setFocus] = useState(false)
   /** 右栏「插入话术标注」的弹层入口（板块内的话术库是常驻的，不走弹层） */
   const [phrasesOpen, setPhrasesOpen] = useState(false)
   const [customPhrases, setCustomPhrases] = useState(() => loadCustomPhrases())
@@ -938,6 +955,25 @@ export default function App() {
     saveCustomPhrases(customPhrases)
   }, [customPhrases])
 
+  // 浮窗位置尺寸持久化
+  useEffect(() => {
+    savePanels(annPanels)
+  }, [annPanels])
+
+  // 换显示器 / 转屏后，把跑出视口的浮窗拉回来（不拉就等于面板丢了）
+  useEffect(() => {
+    let t = 0
+    const onResize = () => {
+      clearTimeout(t)
+      t = setTimeout(() => setAnnPanels((p) => fitPanels(p)), 200)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [])
+
   // 标注模式与加点模式互斥：两者都要「点空白处」，同时开会互相打架
   useEffect(() => {
     if (annOn) setAddMode(false)
@@ -1227,7 +1263,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="layout">
+      <main className={`layout${focus ? ' focus' : ''}`}>
         {/* ---------------- 左栏：点位调整（整个功能域） ---------------- */}
         <aside className="col-left card">
           <h2 className="group-head">点位调整</h2>
@@ -1640,6 +1676,15 @@ export default function App() {
                 标注
               </button>
             </div>
+            {/* 专注模式：小屏下左右栏吃掉太多宽度，照片只剩一小块 */}
+            <button
+              type="button"
+              className={`tool-focus${focus ? ' active' : ''}`}
+              onClick={() => setFocus((v) => !v)}
+              title={focus ? '退出专注模式（恢复左右栏）' : '专注模式：隐藏左右栏，画布最大化'}
+            >
+              ⛶ 专注
+            </button>
           </div>
 
           <div className="canvas-duo">
@@ -1725,6 +1770,10 @@ export default function App() {
                 badge={annLayers.length ? `${annLayers.length} 层` : null}
                 fold={annFold.tools}
                 onFold={() => toggleAnnFold('tools')}
+                floating={annPanels.tools.float}
+                win={annPanels.tools}
+                onWin={(patch) => setPanelWin('tools', patch)}
+                onFloat={() => togglePanelFloat('tools')}
               >
                 {annOn ? (
                   <AnnotateBar
@@ -1755,6 +1804,10 @@ export default function App() {
                 badge={MATERIALS.length}
                 fold={annFold.materials}
                 onFold={() => toggleAnnFold('materials')}
+                floating={annPanels.materials.float}
+                win={annPanels.materials}
+                onWin={(patch) => setPanelWin('materials', patch)}
+                onFloat={() => togglePanelFloat('materials')}
               >
                 <MaterialPanel onPick={addMaterial} />
               </AnnSection>
@@ -1764,6 +1817,10 @@ export default function App() {
                 badge={annLayers.length || null}
                 fold={annFold.layers}
                 onFold={() => toggleAnnFold('layers')}
+                floating={annPanels.layers.float}
+                win={annPanels.layers}
+                onWin={(patch) => setPanelWin('layers', patch)}
+                onFloat={() => togglePanelFloat('layers')}
               >
                 <LayerPanel
                   layers={annLayers}
@@ -1780,6 +1837,10 @@ export default function App() {
                 badge="7 类"
                 fold={annFold.phrases}
                 onFold={() => toggleAnnFold('phrases')}
+                floating={annPanels.phrases.float}
+                win={annPanels.phrases}
+                onWin={(patch) => setPanelWin('phrases', patch)}
+                onFloat={() => togglePanelFloat('phrases')}
               >
                 <PhrasePanel
                   inline

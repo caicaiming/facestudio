@@ -2204,20 +2204,11 @@ body {
   font-size: 10px;
 }
 
+/* 不做嵌套滚动：面板高度不封顶，内容超长时由右栏这一层滚。
+   嵌套滚动条会让"内容没显示完"看起来像 bug —— 用户以为到底了，
+   其实里面还有一层。 */
 .ann-sec-body {
   margin-top: 8px;
-  max-height: 224px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.ann-sec-body::-webkit-scrollbar {
-  width: 6px;
-}
-
-.ann-sec-body::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: #2c2c34;
 }
 
 /* 未开标注模式时，工具板块给个明显的开启入口 */
@@ -2232,9 +2223,10 @@ body {
   margin: 0;
 }
 
-/* 话术库板块：列表单独滚，搜索框与添加行固定在上下两端 */
+/* 话术列表单独滚（60 条全铺开右栏得滚很久），但放宽到能一次看八九条；
+   浮窗模式下 .fp-body .ph-scroll 会解除这个上限，用浮窗尺寸说话。 */
 .ph-scroll {
-  max-height: 132px;
+  max-height: 260px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2316,9 +2308,11 @@ body {
 }
 
 /* ---- 素材库 ---- */
+/* auto-fill 而非固定两列：窄栏两列、浮窗拉宽后自动变三四列，
+   免得放大了浮窗还是两列傻大个 */
 .ann-mats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
   gap: 8px;
 }
 
@@ -2504,4 +2498,151 @@ body {
 
 .ph-del:hover {
   color: var(--negative);
+}
+
+/* ============================================================ 浮窗面板（可拖动 / 可缩放）
+   侧栏宽度固定，素材缩略图与话术列表挤在里面要么太小、要么翻不动。
+   浮出来自己调大小，比加宽侧栏挤画布划算。 */
+
+.float-panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  min-height: 180px;
+  background: var(--card);
+  border: 1px solid #3a3a44;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.fp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.fp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.fp-close {
+  margin-left: auto;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fp-close:hover {
+  color: var(--text);
+}
+
+.fp-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+}
+
+.fp-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.fp-body::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #2c2c34;
+}
+
+/* 浮窗里空间是用户自己给的，不要再套一层固定高度 */
+.fp-body .ph-scroll,
+.fp-body .ann-sec-body {
+  max-height: none;
+  overflow: visible;
+}
+
+.fp-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 45%, #4b4b57 45%, #4b4b57 55%, transparent 55%);
+}
+
+/* 侧栏小节标题右侧的「浮出」按钮 */
+.ann-pop {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ann-pop:hover {
+  color: var(--accent);
+}
+
+.ann-section.floated {
+  background: transparent;
+  border-style: dashed;
+}
+
+.ann-section.floated .ann-count {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------ 专注模式
+   小屏（≤1400px）左右栏吃掉近 560px 宽度，照片只剩一小块。
+   专注模式收起两侧，画布占满 —— 浮窗面板不受影响（它们挂在 body 上）。 */
+.layout.focus {
+  grid-template-columns: 1fr;
+}
+
+.layout.focus .col-left,
+.layout.focus .col-right {
+  display: none;
+}
+
+.tool-focus {
+  padding: 5px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tool-focus:hover {
+  color: var(--text);
+  border-color: #3a3a44;
+}
+
+.tool-focus.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
