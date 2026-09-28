@@ -4,9 +4,23 @@ dist/
 .DS_Store
 .vite/
 
-# 根目录临时截图（冒烟/诊断产物，一律以下划线开头）
+# 根目录临时截图（冒烟/诊断产物，不入库）
 _*.png
 smoke-*.png
 pointedit.png
+compare.png
+custom.png
+preview.png
+smoke-adjust.png
+smoke-three.png
+warp-adjust.png
+warp-reference.png
+_medical-plan.png
 _medical-zones.png
-_zoom-*.png
+_pages-verify-online.png
+_zoom-final.png
+_autotune.png
+_big-shot-1x.png
+_big-shot-3024.png
+_diag-online.png
+vite.config.js.timestamp-*.mjs

@@ -30,13 +30,15 @@ await page.waitForFunction(() => document.querySelector('.status')?.textContent?
 console.log('✓ 检测完成')
 
 // ---- 切到「调整」视图 ----
-await page.getByRole('button', { name: '调整' }).click()
+await page.getByRole('button', { name: '调整', exact: true }).click()
 await page.waitForTimeout(600)
 
-/** 比较 warp 画布与原图的平均像素差异（0–255） */
+/** 比较 warp 画布与原图的平均像素差异（0–255）
+ *  ⚠️ 必须取【预览区】的 warp（第 2 块）：主图的 warp 层 showWarp=false 恒为
+ *  空白，拿它对比就是恒定 98.28% 的假阳性（与 Stage 24.3 的 pointedit 同源）。 */
 const diffFromOriginal = () =>
   page.evaluate(() => {
-    const wc = document.querySelector('canvas.warp')
+    const wc = document.querySelectorAll('canvas.warp')[1]
     const img = document.querySelector('.canvas-wrap img')
     if (!wc || !img) return null
     const c = document.createElement('canvas')

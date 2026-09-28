@@ -1,0 +1,82 @@
+[
+  {
+    "slug": "face-contour",
+    "name": "面部轮廓标注",
+    "file": "annotations/face-contour.png",
+    "w": 1002,
+    "h": 982,
+    "bytes": 60849
+  },
+  {
+    "slug": "highlight-points",
+    "name": "面部高光点位",
+    "file": "annotations/highlight-points.png",
+    "w": 651,
+    "h": 641,
+    "bytes": 34425
+  },
+  {
+    "slug": "eye-muscles",
+    "name": "眼周肌肉走向",
+    "file": "annotations/eye-muscles.png",
+    "w": 283,
+    "h": 671,
+    "bytes": 351789
+  },
+  {
+    "slug": "c1c2-nodes",
+    "name": "C1C2 节点示意",
+    "file": "annotations/c1c2-nodes.png",
+    "w": 452,
+    "h": 261,
+    "bytes": 12306
+  },
+  {
+    "slug": "arc-1c-6c",
+    "name": "弧形轨迹 1C-6C",
+    "file": "annotations/arc-1c-6c.png",
+    "w": 374,
+    "h": 371,
+    "bytes": 14082
+  },
+  {
+    "slug": "bone-points",
+    "name": "骨相高点标注",
+    "file": "annotations/bone-points.png",
+    "w": 488,
+    "h": 504,
+    "bytes": 19167
+  },
+  {
+    "slug": "nose-structure",
+    "name": "鼻部结构标注",
+    "file": "annotations/nose-structure.png",
+    "w": 461,
+    "h": 347,
+    "bytes": 30214
+  },
+  {
+    "slug": "light-shadow",
+    "name": "明暗面结构",
+    "file": "annotations/light-shadow.png",
+    "w": 533,
+    "h": 258,
+    "bytes": 32798
+  },
+  {
+    "slug": "eye-zones",
+    "name": "眼周分区标注",
+    "file": "annotations/eye-zones.png",
+    "w": 152,
+    "h": 259,
+    "bytes": 14240
+  },
+  {
+    "slug": "aesthetic-zones",
+    "name": "面部美学分区",
+    "file": "annotations/aesthetic-zones.png",
+    "w": 803,
+    "h": 1014,
+    "bytes": 119516
+  }
+]

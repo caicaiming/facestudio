@@ -45,7 +45,8 @@ const readCompare = () =>
   })
 
 // 切到调整视图（未做任何修改）→ Δ 应全为 0
-await page.getByRole('button', { name: '调整' }).click()
+// exact:true —— 「自动调整」按钮也会命中模糊匹配，严格模式会直接报错
+await page.getByRole('button', { name: '调整', exact: true }).click()
 await page.waitForTimeout(500)
 const zero = await readCompare()
 console.log('未调整时对比表：', JSON.stringify(zero['综合评分']), JSON.stringify(zero['上庭']))

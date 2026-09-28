@@ -26,6 +26,17 @@ import { RIGHT_HALF, LEFT_HALF, fitLine, mirrorPoint } from './measure.js'
 import { createWarper } from './warp.js'
 import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
 import { DRAG_GAINS, DEFAULT_DRAG_GAIN_KEY, dampDelta, effectiveGain } from './drag.js'
+import {
+  DRAW_TOOLS,
+  beginStroke,
+  drawLayers,
+  hitLayers,
+  makeText,
+  strokeLength,
+  translateLayer,
+  updateStroke,
+} from './annotations.js'
+import { MAT_IMG_CACHE, ensureMaterial } from './materials.js'
 
 /** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
 const MAX_EDGE = 1600
@@ -670,6 +681,16 @@ export default function FaceCanvas({
   tools = true,
   /** 毫米换算系数（mmPerPixel）：>0 时拖动读数额外给出毫米值 */
   mmPerPixel = 0,
+  /**
+   * 标注状态：{ enabled, tool, style, layers, sel }。
+   * enabled 时本画布的指针事件全部交给标注工具 —— 与点位拖动互斥
+   * （同一根手指既要拖点又要画线，必然误操作）。
+   */
+  ann = null,
+  onAnnAdd,
+  onAnnUpdate,
+  onAnnErase,
+  onAnnSelect,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   const warpOn = showWarp ?? view === 'adjustment'
@@ -690,6 +711,16 @@ export default function FaceCanvas({
   /** 图片显示尺寸（CSS px）：由 JS 按容器可用空间算出，null 表示还没测出来 */
   const [fit, setFit] = useState(null)
   const fitRafRef = useRef(0)
+
+  // ---- 标注层 ----
+  const annRef = useRef(null)
+  /** 正在画 / 正在拖的图层：只在画布内以 rAF 重绘，绝不进 React state */
+  const annDraftRef = useRef(null)
+  const annDragRef = useRef(null)
+  /** 文字输入现场：{ nat:{x,y}, left, top, fs, value }（屏幕坐标随缩放定死的快照） */
+  const [annText, setAnnText] = useState(null)
+  const annTextRef = useRef(null)
+  annTextRef.current = annText
 
   // ---- 缩放 / 放大镜 ----
   // zoom 同时存 ref 与 state：ref 供 wheel / 拖拽等原生回调读取最新值，
@@ -1125,6 +1156,170 @@ export default function FaceCanvas({
     setLoupeZ(z)
   }
 
+  // ---------------------------------------------------------------- 标注层
+
+  /**
+   * 标注的尺度换算 k0 = 自然宽 ÷ 100% 显示宽（见 annotations.js 顶部）。
+   *
+   * ⚠️ 分母取【未缩放】的布局宽度 fit.w，而不是 getBoundingClientRect().width：
+   * 后者含整图缩放，会让标注在放大时反而变细。标注是「画在照片上」的，
+   * 照片放大它就得跟着放大；点位标记才该恒定屏幕尺寸（那用 rect 版本）。
+   */
+  const annK0 = () => {
+    const img = imgRef.current
+    const w = img?.naturalWidth || img?.width || 0
+    if (!w) return 1
+    const disp = fit?.w || 0
+    return disp > 0 ? w / disp : 1
+  }
+
+  /** 命中容差（自然像素）：屏幕恒定 ≈9px，缩放后一样好点 */
+  const annTol = () => {
+    const img = imgRef.current
+    const w = img?.naturalWidth || img?.width || 1
+    const disp = img?.getBoundingClientRect().width || 0
+    const k = disp > 0 ? w / disp : 1
+    return Math.max(w * 0.004, 9 * k)
+  }
+
+  function drawAnn() {
+    const ac = annRef.current
+    const img = imgRef.current
+    if (!ac || !img) return
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    if (!w || !h) return
+    const ov = w * h > OVERLAY_MAX_AREA ? Math.sqrt(OVERLAY_MAX_AREA / (w * h)) : 1
+    const cw = Math.max(1, Math.round(w * ov))
+    const ch = Math.max(1, Math.round(h * ov))
+    if (ac.width !== cw || ac.height !== ch) {
+      ac.width = cw
+      ac.height = ch
+    }
+    const ctx = ac.getContext('2d')
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, cw, ch)
+    if (!ann?.enabled) return
+    const layers = ann.layers || []
+    const draft = annDraftRef.current
+    if (!layers.length && !draft) return
+    ctx.setTransform(ov, 0, 0, ov, 0, 0)
+    // 选中态用派生副本标记，不污染上层数据
+    const marked = layers.map((it) => (it.id === ann.sel ? { ...it, __sel: true } : it))
+    drawLayers(ctx, marked, annK0(), MAT_IMG_CACHE, draft)
+  }
+
+  // 标注栈 / 显示尺寸变化 → 重画；素材图未解码时先加载，完成后再补一次
+  useEffect(() => {
+    if (ann?.enabled) {
+      for (const it of ann.layers || []) {
+        if (it.kind === 'material') ensureMaterial(it.src, () => drawAnn())
+      }
+    }
+    drawAnn()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ann, imageSrc, imgReady, fit])
+
+  /** 文字落点：把自然坐标换算成相对 wrap 的屏幕坐标（含当前缩放） */
+  const annTextAt = (p) => {
+    const wrap = wrapRef.current
+    const img = imgRef.current
+    if (!wrap || !img) return null
+    const w = img.naturalWidth || img.width
+    const h = img.naturalHeight || img.height
+    if (!w || !h) return null
+    const wr = wrap.getBoundingClientRect()
+    const ir = img.getBoundingClientRect()
+    return {
+      nat: p,
+      left: ir.left - wr.left + (p.x / w) * ir.width,
+      top: ir.top - wr.top + (p.y / h) * ir.height,
+      // 屏幕字号 = 自然字号 ÷ 缩放比 = font × zoom（推导见 annK0 注释）
+      fs: (ann?.style?.font || 48) * zoomRef.current,
+    }
+  }
+
+  const commitAnnText = () => {
+    const t = annTextRef.current
+    if (!t) return
+    annTextRef.current = null
+    setAnnText(null)
+    const v = String(t.value || '').trim()
+    if (!v) return
+    onAnnAdd?.(makeText(t.nat.x, t.nat.y, v, ann.style))
+  }
+
+  const annDown = (e, p) => {
+    const A = ann
+    const layers = A.layers || []
+    const tol = annTol()
+
+    if (A.tool === 'era') {
+      const i = hitLayers(p, layers, tol)
+      if (i >= 0) onAnnErase?.(i)
+      return
+    }
+    if (A.tool === 'move') {
+      const i = hitLayers(p, layers, tol)
+      if (i >= 0) {
+        e.preventDefault()
+        annDragRef.current = { kind: 'move', index: i, ox: p.x, oy: p.y, base: layers[i] }
+        annDraftRef.current = { replaceIndex: i, item: layers[i] }
+        onAnnSelect?.(layers[i].id)
+        e.currentTarget.style.cursor = 'grabbing'
+        return
+      }
+      if (zoomRef.current > 1) startPan(e)
+      return
+    }
+    if (A.tool === 'text') {
+      e.preventDefault()
+      const at = annTextAt(p)
+      if (at) setAnnText({ ...at, value: '' })
+      return
+    }
+    if (DRAW_TOOLS.has(A.tool)) {
+      e.preventDefault()
+      const item = beginStroke(A.tool, p, p, A.style)
+      annDraftRef.current = { item }
+      annDragRef.current = { kind: 'draw', item, shape: !!A.style.shape }
+      drawAnn()
+      return
+    }
+    if (zoomRef.current > 1) startPan(e)
+  }
+
+  const annMove = (e, p) => {
+    const d = annDragRef.current
+    if (!d) return
+    if (d.kind === 'draw') {
+      updateStroke(d.item, p, d.shape)
+      annDraftRef.current = { item: d.item }
+      drawAnn()
+      return
+    }
+    if (d.kind === 'move') {
+      const moved = translateLayer(d.base, p.x - d.ox, p.y - d.oy)
+      annDraftRef.current = { replaceIndex: d.index, item: moved }
+      drawAnn()
+    }
+  }
+
+  const annUp = () => {
+    const d = annDragRef.current
+    if (!d) return
+    annDragRef.current = null
+    const draft = annDraftRef.current
+    annDraftRef.current = null
+    drawAnn()
+    if (d.kind === 'draw') {
+      // 误触保护：点一下就抬笔（长度≈0）不上栈
+      if (strokeLength(d.item) >= Math.max(2, 4 * annK0())) onAnnAdd?.(d.item)
+    } else if (d.kind === 'move' && draft?.item) {
+      onAnnUpdate?.(d.index, draft.item)
+    }
+  }
+
   // ---------------------------------------------------------------- 点位拖拽
 
   /** 鼠标坐标 → 图片自然像素坐标 */
@@ -1215,6 +1410,12 @@ export default function FaceCanvas({
     }
     if (!p) return
 
+    // 标注模式接管指针事件：与点位拖动互斥（同一根手指既要拖点又要画线必误操作）
+    if (ann?.enabled) {
+      annDown(e, p)
+      return
+    }
+
     // preventDefault 会阻止焦点转移，导致左栏数值框收不到 blur、键入值滞留。
     // 这里先主动提交它，保证「改完数字立刻去拖点」时数字一定已生效。
     const active = document.activeElement
@@ -1256,6 +1457,21 @@ export default function FaceCanvas({
     if (!interactive) return
     const p = toNatural(e)
     if (!p) return
+
+    if (ann?.enabled) {
+      annMove(e, p)
+      if (annDragRef.current) return
+      // 悬停光标：让「这一笔会画在 / 抓到什么」在下笔前就可预期
+      const over = hitLayers(p, ann.layers || [], annTol()) >= 0
+      const cur =
+        ann.tool === 'move' ? (over ? 'grab' : 'default')
+        : ann.tool === 'era' ? (over ? 'not-allowed' : 'default')
+        : ann.tool === 'text' ? 'text'
+        : 'crosshair'
+      e.currentTarget.style.cursor = cur
+      return
+    }
+
     const d = dragRef.current
     if (d) {
       // 上报相对上一次移动的增量，由上层累加到该点既有位移上。
@@ -1313,6 +1529,7 @@ export default function FaceCanvas({
   }
 
   const endDrag = () => {
+    annUp()
     if (panDragRef.current) {
       panDragRef.current = null
       if (wrapRef.current) wrapRef.current.style.cursor = 'default'
@@ -1368,6 +1585,7 @@ export default function FaceCanvas({
             />
             <canvas ref={overlayRef} className="layer overlay" />
             <canvas ref={meshRef} className="layer mesh" />
+            {ann?.enabled && <canvas ref={annRef} className="layer annot" />}
           </>
         ) : (
           <div className="canvas-empty">
@@ -1377,6 +1595,33 @@ export default function FaceCanvas({
           </div>
         )}
       </div>
+
+      {/* 文字标注输入框：不进变换层（否则会跟着缩放糊掉），按落点屏幕坐标定位。
+          字号 = 字号档 × 当前缩放，与画布上最终渲染出来的大小一致。 */}
+      {ann?.enabled && annText && (
+        <input
+          className="ann-text-input"
+          autoFocus
+          value={annText.value}
+          placeholder="输入文字后回车"
+          style={{
+            left: annText.left,
+            top: annText.top,
+            fontSize: annText.fs,
+            color: ann.style?.color || '#e02020',
+          }}
+          onChange={(e) => setAnnText((t) => (t ? { ...t, value: e.target.value } : t))}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitAnnText()
+            else if (e.key === 'Escape') {
+              annTextRef.current = null
+              setAnnText(null)
+            }
+          }}
+          onBlur={commitAnnText}
+        />
+      )}
 
       {tools && imageSrc && (
         <div className="canvas-tools">

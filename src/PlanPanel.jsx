@@ -175,8 +175,9 @@ export default function PlanPanel({ plan, disabled, gender, ipdMm, onGender, onI
         <button
           className="btn-accent"
           disabled={disabled || !onExportImage}
-          onClick={() => {
-            const ok = onExportImage?.()
+          onClick={async () => {
+            // 导出要先等素材图解码完，故为异步（见 App 的 waitMaterials）
+            const ok = await onExportImage?.()
             setExported(!!ok)
             setTimeout(() => setExported(false), 2000)
           }}

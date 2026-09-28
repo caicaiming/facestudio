@@ -80,12 +80,14 @@ await page.click('.seg:nth-child(2) button:nth-child(3)') // 三庭
 await page.waitForTimeout(300)
 await page.screenshot({ path: path.join(ROOT, 'smoke-three.png') })
 
-const slider = await page.$('.slider-row:nth-child(2) input[type=range]')
-await slider.focus()
+// 左栏子元素众多（校准 / 加点 / 反解…），nth-child 会随面板增删漂移，
+// 改按标签文字定位「下巴」滑块
+const sliderRow = page.locator('.slider-row', { has: page.locator('.slider-label', { hasText: '下巴' }) }).first()
+await sliderRow.locator('input[type=range]').focus()
 for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowRight')
 await page.click('.seg:nth-child(1) button:nth-child(2)') // 调整视图
 await page.waitForTimeout(300)
-const sliderVal = await page.textContent('.slider-row:nth-child(2) .slider-value')
+const sliderVal = await sliderRow.locator('.num-input').inputValue()
 log(`✓ 下巴滑块值：${sliderVal}`)
 await page.screenshot({ path: path.join(ROOT, 'smoke-adjust.png') })
 

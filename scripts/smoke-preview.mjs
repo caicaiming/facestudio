@@ -108,7 +108,7 @@ const after = await previewDiff()
 console.log(`✓ 点位调整前预览差异 ${JSON.stringify(before)} → 调整后 ${JSON.stringify(after)}`)
 
 // 切到「调整」视图，主图仍应是原图
-await page.getByRole('button', { name: '调整' }).click()
+await page.getByRole('button', { name: '调整', exact: true }).click()
 await page.waitForTimeout(500)
 const sAdj = await mainState()
 const afterSwitch = await previewDiff()
@@ -140,7 +140,7 @@ const mainOverlay = await page.evaluate(() => {
 console.log(`✓ 预览区叠加层像素 ${JSON.stringify(overlayPixels)}（应为 0）；主图网格层像素 ${mainOverlay}（应 > 0）`)
 
 // ---- 4. 调整对比在「检测」视图下也有数据 ----
-await page.getByRole('button', { name: '检测' }).click()
+await page.getByRole('button', { name: '检测', exact: true }).click()
 await page.waitForTimeout(500)
 const deltas = await page.evaluate(() =>
   [...document.querySelectorAll('table.compare tbody tr')].map((tr) => ({

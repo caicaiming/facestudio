@@ -39,6 +39,25 @@ import {
 } from './detect.js'
 import ZonePanel from './ZonePanel.jsx'
 import PlanPanel from './PlanPanel.jsx'
+import AnnotateBar from './AnnotateBar.jsx'
+import LayerPanel from './LayerPanel.jsx'
+import MaterialPanel from './MaterialPanel.jsx'
+import PhrasePanel from './PhrasePanel.jsx'
+import {
+  MAT_INIT_RATIO,
+  defaultAnnStyle,
+  drawLayers,
+  makeMaterial,
+  makeText,
+  translateLayer,
+} from './annotations.js'
+import {
+  MAT_IMG_CACHE,
+  ensureMaterial,
+  materialReady,
+  materialUrl,
+} from './materials.js'
+import { loadCustomPhrases, saveCustomPhrases } from './phrases.js'
 
 /**
  * 模型权重目录。
@@ -52,6 +71,9 @@ const MODEL_URL = `${import.meta.env.BASE_URL}models`
 
 /** 自定义控制点位移范围（图片自然像素） */
 const CUSTOM_OFFSET_RANGE = 60
+
+/** 标注撤销栈深度：标注数量本就不多，30 步足够覆盖一次沟通的全部改动 */
+const ANN_UNDO_MAX = 30
 
 /** 加点时与已有点的最小间距（相对图片宽度），避免产生退化三角形 */
 const MIN_POINT_GAP_RATIO = 0.012
@@ -193,6 +215,23 @@ export default function App() {
   // 用户自定义控制点：{id, x, y, dx, dy}；x/y 为源位置，dx/dy 为手动位移
   const [customPoints, setCustomPoints] = useState([])
   const [addMode, setAddMode] = useState(false)
+  // ---- 标注（画线 / 文字 / 素材）----
+  const [annOn, setAnnOn] = useState(false)
+  const [annTool, setAnnTool] = useState('arrow')
+  const [annStyle, setAnnStyle] = useState(defaultAnnStyle)
+  /** 图层栈：数组序即 z 序，末尾 = 最上层。坐标一律为图片自然像素 */
+  const [annLayers, setAnnLayers] = useState([])
+  const [annSel, setAnnSel] = useState(null)
+  /** 画布右侧浮层：null | 'layers' | 'materials' */
+  const [annDock, setAnnDock] = useState(null)
+  const [phrasesOpen, setPhrasesOpen] = useState(false)
+  const [customPhrases, setCustomPhrases] = useState(() => loadCustomPhrases())
+  // 撤销 / 重做：整栈快照。标注栈通常只有十几层，快照比逐操作回放省心
+  const [annPast, setAnnPast] = useState([])
+  const [annFuture, setAnnFuture] = useState([])
+  /** 供只绑定一次的键盘回调读取最新值 */
+  const annLayersRef = useRef(annLayers)
+  annLayersRef.current = annLayers
   // 检测元数据：用于基于形变后点位重新测量「调整后指标」
   const [base, setBase] = useState(null)
   // 调整记录快照
@@ -327,6 +366,11 @@ export default function App() {
         setCustomPoints([])
         setAddMode(false)
         setHistory([])
+        // 标注钉在原图的自然像素上，换图即失效，一并清空（含撤销栈）
+        setAnnLayers([])
+        setAnnSel(null)
+        setAnnPast([])
+        setAnnFuture([])
         resetAutoTune()
         setView('detection')
         setOverlay('mesh')
@@ -656,7 +700,50 @@ export default function App() {
    * 直接读 DOM 里的 <img> 与 <canvas>：两者都已加载完成，
    * 不必再走一遍绘制管线，也避免引入额外的截图依赖。
    */
-  const exportComparison = useCallback(() => {
+  /**
+   * 导出前把用到的素材图都等解码完。
+   *
+   * 素材是异步解码的 PNG，直接导出会画出一层空 —— 而导出是一次性动作，
+   * 用户不会察觉「少画了一层」，只会拿到一张缺东西的图。3 秒兜底：
+   * 宁可少一层也不要卡死导出。
+   */
+  const waitMaterials = () =>
+    new Promise((resolve) => {
+      const pending = [
+        ...new Set(
+          annLayersRef.current.filter((l) => l.kind === 'material' && !materialReady(l.src)).map((l) => l.src),
+        ),
+      ]
+      if (!pending.length) return resolve()
+      let left = pending.length
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        resolve()
+      }
+      for (const s of pending) ensureMaterial(s, () => (--left <= 0 ? finish() : undefined))
+      window.setTimeout(finish, 3000)
+    })
+
+  /**
+   * 把标注层画到导出画布上。
+   *
+   * k0 取「自然宽 ÷ 屏幕布局宽」—— 与画布上的算法完全一致（见
+   * FaceCanvas 的 annK0），所以导出图里的线宽、字号与屏幕上看到的一致。
+   * 标注坐标本来就是自然像素，左右两幅直接复用同一份栈。
+   */
+  const stampAnnotations = (ctx, w, h, dx, dispW) => {
+    const layers = annLayersRef.current
+    if (!layers.length) return
+    const k0 = dispW > 0 ? w / dispW : 1
+    ctx.save()
+    ctx.translate(dx, 0)
+    drawLayers(ctx, layers, k0, MAT_IMG_CACHE, null)
+    ctx.restore()
+  }
+
+  const exportComparison = useCallback(async () => {
     const wraps = document.querySelectorAll('.canvas-duo .canvas-wrap')
     if (wraps.length < 2) return false
     const img = wraps[0]?.querySelector('img')
@@ -664,6 +751,8 @@ export default function App() {
     const w = img?.naturalWidth || 0
     const h = img?.naturalHeight || 0
     if (!w || !h || !warp || !warp.width) return false
+
+    await waitMaterials()
 
     const gap = Math.round(w * 0.03)
     const out = document.createElement('canvas')
@@ -676,6 +765,10 @@ export default function App() {
     // warp 画布按 maxEdge 缩放过，drawImage 时统一拉回原图尺寸
     ctx.drawImage(img, 0, 0, w, h)
     ctx.drawImage(warp, w + gap, 0, w, h)
+    // 标注同时盖在两侧：它是针对这张照片画的，术前术后都该看得见
+    const dispW = img.clientWidth || 0
+    stampAnnotations(ctx, w, h, 0, dispW)
+    stampAnnotations(ctx, w, h, w + gap, dispW)
 
     const fs = Math.max(14, Math.round(h * 0.035))
     ctx.font = `600 ${fs}px system-ui, "Microsoft YaHei", sans-serif`
@@ -701,6 +794,208 @@ export default function App() {
     a.remove()
     return true
   }, [])
+
+  /** 只导出原始照片 + 标注（不拼对比图）：给顾客发「问题标注图」时用 */
+  const exportAnnotated = useCallback(async () => {
+    const wrap = document.querySelector('.canvas-duo .canvas-wrap')
+    const img = wrap?.querySelector('img')
+    const w = img?.naturalWidth || 0
+    const h = img?.naturalHeight || 0
+    if (!w || !h) return false
+
+    await waitMaterials()
+
+    const out = document.createElement('canvas')
+    out.width = w
+    out.height = h
+    const ctx = out.getContext('2d')
+    ctx.drawImage(img, 0, 0, w, h)
+    stampAnnotations(ctx, w, h, 0, img.clientWidth || 0)
+
+    const a = document.createElement('a')
+    a.href = out.toDataURL('image/png')
+    a.download = `面部标注_${new Date().toISOString().slice(0, 10)}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return true
+  }, [])
+
+  // ---------------------------------------------------------------- 标注
+
+  /**
+   * 提交新图层栈：先把旧栈压入撤销栈，再写新栈。
+   * 读 ref 而非闭包里的 annLayers —— 画布的指针回调不随渲染重建，
+   * 用闭包会拿到过期数组，连续画两笔就只剩最后一笔。
+   */
+  const commitAnn = useCallback((next) => {
+    const cur = annLayersRef.current
+    const v = typeof next === 'function' ? next(cur) : next
+    if (v === cur) return
+    setAnnPast((p) => [...p.slice(-(ANN_UNDO_MAX - 1)), cur])
+    setAnnFuture([])
+    setAnnLayers(v)
+  }, [])
+
+  const annAdd = useCallback(
+    (item) => {
+      commitAnn((cur) => [...cur, item])
+      setAnnSel(item.id)
+    },
+    [commitAnn],
+  )
+
+  const annUpdate = useCallback(
+    (i, item) => commitAnn((cur) => cur.map((x, k) => (k === i ? item : x))),
+    [commitAnn],
+  )
+
+  const annErase = useCallback(
+    (i) => {
+      commitAnn((cur) => cur.filter((_, k) => k !== i))
+      setAnnSel(null)
+    },
+    [commitAnn],
+  )
+
+  const annToggleVisible = useCallback(
+    (i) => commitAnn((cur) => cur.map((x, k) => (k === i ? { ...x, visible: x.visible === false } : x))),
+    [commitAnn],
+  )
+
+  const annReorder = useCallback(
+    (i, dir) =>
+      commitAnn((cur) => {
+        const j = i + dir
+        if (j < 0 || j >= cur.length) return cur
+        const next = cur.slice()
+        const t = next[i]
+        next[i] = next[j]
+        next[j] = t
+        return next
+      }),
+    [commitAnn],
+  )
+
+  const undoAnn = () => {
+    if (annPast.length === 0) return
+    const prev = annPast[annPast.length - 1]
+    setAnnPast(annPast.slice(0, -1))
+    setAnnFuture((f) => [annLayers, ...f])
+    setAnnLayers(prev)
+  }
+
+  const redoAnn = () => {
+    if (annFuture.length === 0) return
+    const next = annFuture[0]
+    setAnnFuture(annFuture.slice(1))
+    setAnnPast((p) => [...p, annLayers])
+    setAnnLayers(next)
+  }
+
+  const clearAnn = () => {
+    commitAnn([])
+    setAnnSel(null)
+  }
+
+  /** 素材贴到画面中央：高度取画布短边的 60%（与融合工具的出厂值一致） */
+  const addMaterial = (m) => {
+    const w = base?.w || 1000
+    const h = base?.h || 1000
+    const s = (Math.min(w, h) * MAT_INIT_RATIO) / Math.max(m.w, m.h)
+    annAdd(
+      makeMaterial(materialUrl(m), m.name, w / 2, h / 2, Math.round(m.w * s), Math.round(m.h * s)),
+    )
+    setAnnTool('move')
+  }
+
+  /**
+   * 话术落为文字标注。
+   * 多次插入按行错开（第 n 条下移 n×7.5% 图高）—— 都落在同一点会叠成一团，
+   * 顾客根本看不清。
+   */
+  const addPhraseText = (text) => {
+    const w = base?.w || 1000
+    const h = base?.h || 1000
+    const n = annLayersRef.current.filter((l) => l.kind === 'text').length
+    setAnnOn(true)
+    annAdd(makeText(w * 0.05, h * (0.14 + 0.075 * (n % 10)), text, annStyle))
+  }
+
+  const addCustomPhrase = (t) =>
+    setCustomPhrases((cur) => (cur.includes(t) ? cur : [...cur, t]))
+
+  const removeCustomPhrase = (t) => setCustomPhrases((cur) => cur.filter((x) => x !== t))
+
+  // 自定义话术持久化
+  useEffect(() => {
+    saveCustomPhrases(customPhrases)
+  }, [customPhrases])
+
+  // 标注模式与加点模式互斥：两者都要「点空白处」，同时开会互相打架
+  useEffect(() => {
+    if (annOn) setAddMode(false)
+  }, [annOn])
+
+  // 标注快捷键：撤销 / 重做 / 删除 / 方向键微调 / 素材缩放旋转
+  useEffect(() => {
+    if (!annOn) return
+    const onKey = (e) => {
+      const tag = document.activeElement?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key.toLowerCase() === 'z') {
+          e.preventDefault()
+          if (e.shiftKey) redoAnn()
+          else undoAnn()
+        }
+        return
+      }
+      const layers = annLayersRef.current
+      const i = layers.findIndex((x) => x.id === annSel)
+      if (i < 0) return
+      const it = layers[i]
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        annErase(i)
+        return
+      }
+      const step = Math.max(1, (base?.w || 1000) * 0.002)
+      const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }
+      if (nudge[e.key]) {
+        e.preventDefault()
+        const [dx, dy] = nudge[e.key]
+        annUpdate(i, translateLayer(it, dx, dy))
+        return
+      }
+      // 素材专用：[] 缩放、, . 旋转
+      if (it.kind === 'material') {
+        if (e.key === '[' || e.key === ']') {
+          e.preventDefault()
+          const f = e.key === '[' ? 0.9 : 1 / 0.9
+          annUpdate(i, { ...it, w: Math.round(it.w * f), h: Math.round(it.h * f) })
+        } else if (e.key === ',' || e.key === '.') {
+          e.preventDefault()
+          annUpdate(i, { ...it, rot: ((it.rot || 0) + (e.key === ',' ? -15 : 15)) % 360 })
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annOn, annSel, annPast, annFuture, annLayers, base])
+
+  /** 传给画布的标注状态（预览区不带标注：一份栈只服务一张照片） */
+  const ann = useMemo(
+    () => ({
+      enabled: annOn && !!points,
+      tool: annTool,
+      style: annStyle,
+      layers: annLayers,
+      sel: annSel,
+    }),
+    [annOn, points, annTool, annStyle, annLayers, annSel],
+  )
 
   const clearCustomPoints = useCallback(() => {
     setCustomPoints([])
@@ -864,6 +1159,8 @@ export default function App() {
         previewPoints,
         pointOffsets,
         subunitValues,
+        // 标注：冒烟脚本要读图层栈验证「画出来的东西确实进了数据」
+        ann: { on: annOn, tool: annTool, style: annStyle, layers: annLayers, sel: annSel },
       }
     }
   }, [
@@ -878,6 +1175,11 @@ export default function App() {
     previewPoints,
     pointOffsets,
     subunitValues,
+    annOn,
+    annTool,
+    annStyle,
+    annLayers,
+    annSel,
   ])
 
   return (
@@ -1320,7 +1622,37 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {/* 标注模式：开启后画布的指针事件全部交给标注工具，点位拖动暂停 */}
+            <div className="seg">
+              <button
+                className={annOn ? 'active' : ''}
+                disabled={!points}
+                onClick={() => setAnnOn((v) => !v)}
+                title="在照片上画线、加文字、贴示意图"
+              >
+                标注
+              </button>
+            </div>
           </div>
+
+          {annOn && (
+            <AnnotateBar
+              tool={annTool}
+              style={annStyle}
+              onTool={setAnnTool}
+              onStyle={setAnnStyle}
+              onUndo={undoAnn}
+              onRedo={redoAnn}
+              onClear={clearAnn}
+              canUndo={annPast.length > 0}
+              canRedo={annFuture.length > 0}
+              count={annLayers.length}
+              dock={annDock}
+              onDock={setAnnDock}
+              onPhrases={() => setPhrasesOpen(true)}
+              onExport={exportAnnotated}
+            />
+          )}
 
           <div className="canvas-duo">
             <div
@@ -1353,7 +1685,33 @@ export default function App() {
                 onAnchorSelect={setActiveAnchor}
                 activeAnchor={activeAnchor}
                 mmPerPixel={scale?.ok ? scale.mmPerPixel : 0}
+                ann={ann}
+                onAnnAdd={annAdd}
+                onAnnUpdate={annUpdate}
+                onAnnErase={annErase}
+                onAnnSelect={setAnnSel}
               />
+
+              {/* 浮层贴着画布右侧：调图层 / 挑素材都要看着照片操作，
+                  放进左右栏就得来回瞟。 */}
+              {annDock === 'layers' && (
+                <div className="ann-dock">
+                  <LayerPanel
+                    layers={annLayers}
+                    sel={annSel}
+                    onSelect={setAnnSel}
+                    onToggleVisible={annToggleVisible}
+                    onRemove={annErase}
+                    onReorder={annReorder}
+                    onClear={clearAnn}
+                  />
+                </div>
+              )}
+              {annDock === 'materials' && (
+                <div className="ann-dock">
+                  <MaterialPanel onPick={addMaterial} />
+                </div>
+              )}
             </div>
 
             {/* 预览区：常驻显示形变后的照片。点位/滑块一变，这里立即重绘，无需切视图 */}
@@ -1610,10 +1968,28 @@ export default function App() {
             <div className="card">
               <h2 className="card-title">分析文案</h2>
               <p className="copy">{analysis.copy}</p>
+              {/* 话术库第二入口：系统文案偏理性，补一句顾客听得懂的落到照片上 */}
+              <button
+                className="btn-ghost sm"
+                disabled={!points}
+                onClick={() => setPhrasesOpen(true)}
+              >
+                插入话术标注
+              </button>
             </div>
           )}
         </aside>
       </main>
+
+      {phrasesOpen && (
+        <PhrasePanel
+          custom={customPhrases}
+          onPick={addPhraseText}
+          onAddCustom={addCustomPhrase}
+          onRemoveCustom={removeCustomPhrase}
+          onClose={() => setPhrasesOpen(false)}
+        />
+      )}
 
       <footer className="disclaimer">
         本工具仅提供面部几何特征的可视化测量，不构成任何医疗、美容或整形建议。

@@ -1988,3 +1988,434 @@ body {
   /* 绝不能吃掉指针事件：放大镜只是视觉辅助，底下的点位仍要能拖动 */
   pointer-events: none;
 }
+
+/* ================================================================ 标注（画线 / 文字 / 素材）
+   迁自自研「图片融合」工具：工具条常驻中栏、图层与素材浮在画布右侧。
+   浮层而非塞进左右栏 —— 调图层、挑素材都要盯着照片做，放远了就得来回瞟。 */
+
+.ann-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ann-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.ann-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 工具按钮：图标 + 文字。纯图标在 8 个工具时辨识度不够，
+   咨询师不是天天用，看名字才知道哪个是画箭头的。 */
+.ann-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ann-tool:hover {
+  border-color: #3a3a44;
+  color: var(--text);
+}
+
+.ann-tool.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ann-tool-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.ann-colors {
+  gap: 5px;
+}
+
+.ann-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.ann-swatch.active {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3px #fff;
+}
+
+.ann-knob {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.ann-knob input[type='range'] {
+  width: 92px;
+  accent-color: var(--accent);
+}
+
+.ann-knob b {
+  min-width: 30px;
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+
+.ann-chip {
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ann-chip:hover:not(:disabled) {
+  border-color: #3a3a44;
+  color: var(--text);
+}
+
+.ann-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ann-chip.active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: var(--accent);
+  color: #bfdbfe;
+}
+
+.ann-chip.accent {
+  border-color: var(--accent);
+  color: #bfdbfe;
+}
+
+.ann-count {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.ann-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ann-actions {
+  gap: 6px;
+}
+
+/* ---- 画布右侧浮层 ---- */
+.ann-dock {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  width: 216px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 10px;
+  background: rgba(20, 20, 24, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.ann-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.ann-panel-head .btn-mini {
+  margin-left: auto;
+}
+
+.ann-layers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ann-layer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.ann-layer:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ann-layer.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.ann-layer.hidden .ann-layer-name {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.ann-eye {
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ann-layer-name {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ann-layer-ops {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.ann-layer-ops button {
+  padding: 0 3px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ann-layer-ops button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.ann-layer-ops button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ---- 素材库 ---- */
+.ann-mats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ann-mat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: #0d0d11;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ann-mat:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* 素材本身是深色描线的透明 PNG，垫一层浅底才看得清 */
+.ann-mat img {
+  width: 100%;
+  height: 56px;
+  object-fit: contain;
+  background: linear-gradient(180deg, #f4f4f6, #dcdce2);
+  border-radius: 4px;
+}
+
+.ann-mat span {
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* ---- 文字输入（画布上就地输入） ---- */
+.ann-text-input {
+  position: absolute;
+  z-index: 7;
+  min-width: 120px;
+  max-width: 60%;
+  padding: 2px 6px;
+  background: rgba(10, 10, 12, 0.85);
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+  font-family: inherit;
+  line-height: 1.25;
+  outline: none;
+}
+
+/* ---- 话术库弹层 ---- */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(78vh, 720px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-head .dim {
+  font-size: 12px;
+}
+
+.modal-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-foot .dim {
+  font-size: 11px;
+}
+
+.btn-accent.sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.ph-search,
+.ph-add {
+  flex: 1;
+  padding: 6px 10px;
+  background: #0d0d11;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.ph-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.ph-group {
+  margin-bottom: 12px;
+}
+
+.ph-cat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ph-num {
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.ph-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ph-item {
+  padding: 4px 10px;
+  background: #0d0d11;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ph-item:hover {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.ph-del {
+  margin-left: 6px;
+  color: var(--text-dim);
+}
+
+.ph-del:hover {
+  color: var(--negative);
+}
