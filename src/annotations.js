@@ -157,7 +157,9 @@ export function makeMaterial(src, name, x, y, w, h) {
     w,
     h,
     rot: 0,
-    alpha: 1,
+    // 默认 62%：示意图是「垫在点位下的参考」，全不透明会糊住网格与 68 点；
+    // 素材上的文字线稿又密，淡一点两层都能看清。要实色用面板滑块调回 100%。
+    alpha: 0.62,
   }
 }
 

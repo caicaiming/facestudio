@@ -496,7 +496,14 @@ export default function App() {
   /**
    * 形变后的完整点集（预览区与「调整后指标」共用）。
    * 与 view 无关 —— 预览区常驻显示调整结果，故任何视图下都要能算出形变点位。
+   *
+   * 点位手动位移走 useDeferredValue（低优先级）：拖点每帧 setState 会连带
+   * 预览区 warp 全图重贴图（最贵的一环）+ 右栏指标重算，同步做就是拖动
+   * 跳帧的根源。deferred 让 React 优先保障主图点位跟手，预览与指标以并发
+   * 节奏跟进 —— 主观感受从「跳帧卡顿」变成「预览稍滞后但顺滑」。
    */
+  const deferredOffsets = useDeferredValue(pointOffsets)
+  const deferredCustom = useDeferredValue(customPoints)
   const previewPoints = useMemo(() => {
     if (!points) return null
     // 形变四层叠加：5 路预设滑块 → 亚单位局部形变 → 医美部位形变 → 逐点手动位移
@@ -508,23 +515,23 @@ export default function App() {
         siteValues,
         { hairlineY: base?.hairlineY },
       ),
-      pointOffsets,
+      deferredOffsets,
     )
     // 锚点软跟随：减小大形变时侧面三角形的剪切，避免发丝纹理拉成条纹
     // 耳部档位额外推动外缘锚点 —— 68 点在耳区没有点，不动锚点就看不到变化
     const anchorsD = earAnchorOffsets(points, displaceAnchors(anchors, points, d), siteValues, {
       hairlineY: base?.hairlineY,
     })
-    if (customPoints.length === 0) return d.concat(anchorsD)
+    if (deferredCustom.length === 0) return d.concat(anchorsD)
     // 自定义点：先跟随邻近关键点的整体形变（IDW），再叠加用户手动位移。
     // 只跟随不手动位移时，它表现为「局部锚定」；拖它则做局部推拉。
     const customD = displaceByIDW(
-      customPoints.map((c) => ({ x: c.x, y: c.y })),
+      deferredCustom.map((c) => ({ x: c.x, y: c.y })),
       points,
       d,
-    ).map((p, i) => ({ x: p.x + customPoints[i].dx, y: p.y + customPoints[i].dy }))
+    ).map((p, i) => ({ x: p.x + deferredCustom[i].dx, y: p.y + deferredCustom[i].dy }))
     return d.concat(anchorsD, customD)
-  }, [points, params, subunitValues, siteValues, pointOffsets, customPoints, anchors, base])
+  }, [points, params, subunitValues, siteValues, deferredOffsets, deferredCustom, anchors, base])
 
   /**
    * 主图点集：主图始终显示原图照片，叠加层必须与照片同坐标系，否则点位会浮在

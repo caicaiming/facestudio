@@ -1514,29 +1514,14 @@ export default function FaceCanvas({
     e.currentTarget.style.cursor = 'grabbing'
   }
 
-  const onPointerDown = (e) => {
-    trackPointer(e)
-    const p = toNatural(e)
-
-    // 非交互画布（预览区）也要能拖动平移 —— 放大看形变细节同样需要
-    if (!interactive) {
-      if (p && zoomRef.current > 1) startPan(e)
-      return
-    }
-    if (!p) return
-
-    // 标注模式接管指针事件：与点位拖动互斥（同一根手指既要拖点又要画线必误操作）
-    if (ann?.enabled) {
-      annDown(e, p)
-      return
-    }
-
-    // preventDefault 会阻止焦点转移，导致左栏数值框收不到 blur、键入值滞留。
-    // 这里先主动提交它，保证「改完数字立刻去拖点」时数字一定已生效。
+  /**
+   * 点位 / 锚点「按下即拖」（标注模式与非标注模式共用）。
+   * preventDefault 会阻止焦点转移，导致左栏数值框收不到 blur、键入值滞留。
+   * 这里先主动提交它，保证「改完数字立刻去拖点」时数字一定已生效。
+   */
+  const beginPointDrag = (e, p, hit) => {
     const active = document.activeElement
     if (active && active !== document.body && typeof active.blur === 'function') active.blur()
-
-    const hit = hitTest(p)
 
     // 加点模式：点在空白处则新建控制点；命中已有点则照常拖动
     if (addMode && !hit) {
@@ -1557,6 +1542,40 @@ export default function FaceCanvas({
     else onPointSelect?.(hit.id)
   }
 
+  const onPointerDown = (e) => {
+    trackPointer(e)
+    const p = toNatural(e)
+
+    // 非交互画布（预览区）也要能拖动平移 —— 放大看形变细节同样需要
+    if (!interactive) {
+      if (p && zoomRef.current > 1) startPan(e)
+      return
+    }
+    if (!p) return
+
+    // 标注模式接管指针事件，但有一条让路规则：素材贴上去之后，「贴着示意图
+    // 对照着拖点位」是咨询师的核心动作，标注不能把点位锁死。优先级：
+    //   橡皮（任务就是删，落在点位上也不改成拖点）
+    //   > 变换手柄（正在变形选中的标注）
+    //   > 点位 / 锚点命中（贴纸压不住的那 68 个点）
+    //   > 标注工具（画线 / 移动 / 文字…）
+    if (ann?.enabled) {
+      if (ann.tool === 'era' || annHandleAt(p)) {
+        annDown(e, p)
+        return
+      }
+      const phit = hitTest(p)
+      if (phit) {
+        beginPointDrag(e, p, phit)
+        return
+      }
+      annDown(e, p)
+      return
+    }
+
+    beginPointDrag(e, p, hitTest(p))
+  }
+
   const onPointerMove = (e) => {
     trackPointer(e)
 
@@ -1573,25 +1592,8 @@ export default function FaceCanvas({
     const p = toNatural(e)
     if (!p) return
 
-    if (ann?.enabled) {
-      annMove(e, p)
-      if (annDragRef.current) return
-      // 悬停光标：让「这一笔会画在 / 抓到什么」在下笔前就可预期
-      const h = annHandleAt(p)
-      if (h) {
-        e.currentTarget.style.cursor = handleCursor(h.id)
-        return
-      }
-      const over = hitLayers(p, ann.layers || [], annTol()) >= 0
-      const cur =
-        ann.tool === 'move' ? (over ? 'grab' : 'default')
-        : ann.tool === 'era' ? (over ? 'not-allowed' : 'default')
-        : ann.tool === 'text' ? 'text'
-        : 'crosshair'
-      e.currentTarget.style.cursor = cur
-      return
-    }
-
+    // 点位拖动优先于标注交互：标注模式下按下点位也会进入点位拖动
+    // （见 onPointerDown 的让路规则），move 期间不能再被 annMove 截走
     const d = dragRef.current
     if (d) {
       // 上报相对上一次移动的增量，由上层累加到该点既有位移上。
@@ -1633,6 +1635,30 @@ export default function FaceCanvas({
           fine: e.shiftKey,
         })
       }
+      return
+    }
+
+    if (ann?.enabled) {
+      annMove(e, p)
+      if (annDragRef.current) return
+      // 悬停光标：让「这一笔会画在 / 抓到什么」在下笔前就可预期
+      const h = annHandleAt(p)
+      if (h) {
+        e.currentTarget.style.cursor = handleCursor(h.id)
+        return
+      }
+      // 点位 hover：标注模式下点位照样可拖，光标提前给出「能抓」的暗示
+      if (ann.tool !== 'era' && hitTest(p)) {
+        e.currentTarget.style.cursor = 'grab'
+        return
+      }
+      const over = hitLayers(p, ann.layers || [], annTol()) >= 0
+      const cur =
+        ann.tool === 'move' ? (over ? 'grab' : 'default')
+        : ann.tool === 'era' ? (over ? 'not-allowed' : 'default')
+        : ann.tool === 'text' ? 'text'
+        : 'crosshair'
+      e.currentTarget.style.cursor = cur
       return
     }
     const hit = hitTest(p)

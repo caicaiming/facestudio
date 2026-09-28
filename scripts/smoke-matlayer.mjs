@@ -12,7 +12,8 @@
  *         ⚠️ 采样对象必须是 mesh：默认 overlay='mesh'，68 点标记画在 mesh 上，
  *         overlay 画布此时是空的 —— 这里踩过一次，量错画布会得到假阴性。
  *      ④ 拖动画线仍在点位之上（箭头层有像素）
- *      ⑤ 选中素材后不透明度滑块可调
+ *      ⑤ 选中素材后不透明度滑块可调；新插素材默认 62% 不糊点位
+ *      ⑥ 标注模式下点位照样可拖（让路规则：橡皮/手柄 > 点位 > 标注工具）
  */
 import { chromium } from 'playwright-core'
 import path from 'node:path'
@@ -173,17 +174,52 @@ await page.waitForTimeout(250)
 const annCov2 = await coverage('.layer.annot')
 check('④ 画线画在上层（不被点位压）', annCov2 > annCovMat + 0.05, `${annCovMat.toFixed(3)}% → ${annCov2.toFixed(3)}%`)
 
-// ---------- ⑤ 素材不透明度可调 ----------
+// ---------- ⑤ 素材不透明度可调 + 默认半透明 ----------
 console.log('== 不透明度 ==')
 await page.locator('.ann-layer', { hasText: mat.name }).first().click()
 await page.waitForTimeout(200)
-const a0 = (await layers()).find((x) => x.id === mat.id)?.alpha
+const matNow = (await layers()).find((x) => x.id === mat.id)
+check("⑤a 新素材默认 62%（不糊点位）", Math.abs(matNow.alpha - 0.62) < 0.01, `alpha=${matNow.alpha}`)
+const a0 = matNow.alpha
 await page.locator('.ann-sel-alpha input[type=range]').fill('40')
 await page.waitForTimeout(250)
 const a1 = (await layers()).find((x) => x.id === mat.id)?.alpha
-check('⑤ 不透明度滑块生效', Math.abs(a1 - 0.4) < 0.01, `${a0} → ${a1}`)
+check('⑤b 不透明度滑块生效', Math.abs(a1 - 0.4) < 0.01, `${a0} → ${a1}`)
 
-check('⑥ 无控制台报错', errors.length === 0, errors.slice(0, 2).join(' | '))
+// ---------- ⑥ 标注模式下点位照样可拖 ----------
+console.log('== 标注模式拖点位 ==')
+// 当前是箭头工具 + 素材选中。直接从鼻尖点位下笔：应命中点位而不是画箭头
+const screenOfPoint = (i) =>
+  page.evaluate((idx) => {
+    const img = document.querySelector('.canvas-duo .canvas-wrap img')
+    const r = img.getBoundingClientRect()
+    const p = window.__faceStudio.displayPoints[idx]
+    return { x: r.left + (p.x / img.naturalWidth) * r.width, y: r.top + (p.y / img.naturalHeight) * r.height }
+  }, i)
+const offsetOf = (i) =>
+  page.evaluate((idx) => window.__faceStudio.pointOffsets[idx] || { dx: 0, dy: 0 }, i)
+
+const s33 = await screenOfPoint(33)
+await page.mouse.move(s33.x, s33.y)
+await page.mouse.down()
+for (let i = 1; i <= 8; i++) await page.mouse.move(s33.x + i * 3, s33.y + i * 2)
+await page.mouse.up()
+await page.waitForTimeout(400)
+const off = await offsetOf(33)
+check('⑥a 标注开着也能拖点位（点位命中优先）', Math.abs(off.dx) > 5 && Math.abs(off.dy) > 3, `dx=${off.dx?.toFixed?.(2)} dy=${off.dy?.toFixed?.(2)}`)
+// 起笔不在点位上时仍是画箭头：图层栈应出现新的 arrow
+const beforeCount = (await layers()).length
+const a2 = await toScreen({ x: G.w * 0.62, y: G.h * 0.3 })
+const b2 = await toScreen({ x: G.w * 0.72, y: G.h * 0.36 })
+await page.mouse.move(a2.x, a2.y)
+await page.mouse.down()
+for (let i = 1; i <= 8; i++) await page.mouse.move(a2.x + ((b2.x - a2.x) * i) / 8, a2.y + ((b2.y - a2.y) * i) / 8)
+await page.mouse.up()
+await page.waitForTimeout(300)
+const L2 = await layers()
+check('⑥b 空白处起笔仍是画箭头', L2.length === beforeCount + 1 && L2[L2.length - 1].kind === 'arrow', `层数 ${beforeCount} → ${L2.length}`)
+
+check('⑦ 无控制台报错', errors.length === 0, errors.slice(0, 2).join(' | '))
 
 await page.screenshot({ path: 'smoke-matlayer.png' })
 await browser.close()

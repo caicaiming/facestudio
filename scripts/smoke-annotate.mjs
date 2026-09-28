@@ -107,7 +107,8 @@ check('①b 默认工具为箭头', (await annState()).tool === 'arrow')
 await page.locator('.ann-tool', { hasText: '移动' }).click()
 await page.waitForTimeout(150)
 
-// 点位是 33（鼻尖）：标注模式下拖动它不应产生位移
+// 点位是 33（鼻尖）：标注模式下拖它【生效】—— 让路规则（橡皮/手柄 > 点位 >
+// 标注工具）保证贴素材对照时点位照样可调；橡皮工具下仍让位给删除。
 await page.selectOption('select[aria-label="选择点位"]', '33')
 await page.waitForTimeout(200)
 const p33 = await page.evaluate(() => {
@@ -125,7 +126,21 @@ const moved33 = await page.evaluate(() => {
   const o = window.__faceStudio.pointOffsets[33] || { dx: 0, dy: 0 }
   return Math.hypot(o.dx, o.dy)
 })
-check('①c 标注模式下点位拖动被让位（互斥）', moved33 < 0.001, `位移 ${moved33.toFixed(2)}px`)
+check('①c 标注模式下点位照样可拖（点位命中优先）', moved33 > 10, `位移 ${moved33.toFixed(2)}px`)
+// 橡皮例外：任务就是删除，落在点位上也不改成拖点
+const off33 = await page.evaluate(() => window.__faceStudio.pointOffsets[33] || { dx: 0, dy: 0 })
+await page.locator('.ann-tool', { hasText: '橡皮' }).click()
+await page.waitForTimeout(150)
+await page.mouse.move(p33.x, p33.y)
+await page.mouse.down()
+await page.mouse.move(p33.x + 40, p33.y)
+await page.mouse.up()
+await page.waitForTimeout(200)
+const moved33b = await page.evaluate((base) => {
+  const o = window.__faceStudio.pointOffsets[33] || { dx: 0, dy: 0 }
+  return Math.hypot(o.dx - base.dx, o.dy - base.dy)
+}, off33)
+check('①d 橡皮工具下点位不让拖（不与删除混淆）', moved33b < 0.001, `位移 ${moved33b.toFixed(2)}px`)
 
 // ---------- ② 画箭头 ----------
 console.log('== 画线 ==')
@@ -145,9 +160,10 @@ check('②b 端点落在按下/松开处', hitA && hitB, `起(${L[0]?.x1.toFixed
 await page.locator('.ann-tool', { hasText: '直线' }).click()
 await page.locator('.ann-chip', { hasText: '45°吸附' }).click()
 await page.waitForTimeout(150)
-const a2 = { x: G.w * 0.6, y: G.h * 0.4 }
+// 起笔避开 68 点热区（让路规则下，压在点位上下笔会变成拖点位）
+const a2 = { x: G.w * 0.66, y: G.h * 0.74 }
 // 故意给一个「接近但不等于 45°」的方向（约 38°）
-const b2 = { x: G.w * 0.6 + G.w * 0.2, y: G.h * 0.4 + G.h * 0.2 * 0.78 }
+const b2 = { x: G.w * 0.66 + G.w * 0.18, y: G.h * 0.74 + G.h * 0.18 * 0.78 }
 await drawStroke(a2, b2)
 L = await layers()
 const line = L[1]
