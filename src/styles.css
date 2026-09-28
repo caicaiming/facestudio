@@ -2672,3 +2672,24 @@ body {
 .ann-sel-bar .ann-layer-ops button {
   font-size: 13px;
 }
+
+/* 选中项的不透明度旋钮 */
+.ann-sel-alpha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ann-sel-alpha input[type='range'] {
+  width: 62px;
+  accent-color: var(--accent);
+}
+
+.ann-sel-alpha b {
+  min-width: 30px;
+  font-weight: 600;
+  text-align: right;
+}

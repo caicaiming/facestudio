@@ -47,7 +47,7 @@ import PhrasePanel from './PhrasePanel.jsx'
 import {
   MAT_INIT_RATIO,
   defaultAnnStyle,
-  drawLayers,
+  drawStack,
   layerBox,
   makeMaterial,
   makeText,
@@ -763,7 +763,7 @@ export default function App() {
     const k0 = dispW > 0 ? w / dispW : 1
     ctx.save()
     ctx.translate(dx, 0)
-    drawLayers(ctx, layers, k0, MAT_IMG_CACHE, null)
+    drawStack(ctx, layers, k0, MAT_IMG_CACHE)
     ctx.restore()
   }
 
@@ -925,6 +925,17 @@ export default function App() {
       const i = layers.findIndex((x) => x.id === annSel)
       if (i < 0) return
       annUpdate(i, rotateLayer(layers[i], deg))
+    },
+    [annSel, annUpdate],
+  )
+
+  /** 选中层的不透明度（素材贴脸挡视线时调淡，比挪开省事） */
+  const alphaSel = useCallback(
+    (a) => {
+      const layers = annLayersRef.current
+      const i = layers.findIndex((x) => x.id === annSel)
+      if (i < 0) return
+      annUpdate(i, { ...layers[i], alpha: Math.max(0.15, Math.min(1, a)) })
     },
     [annSel, annUpdate],
   )
@@ -1861,6 +1872,7 @@ export default function App() {
                   onReorder={annReorder}
                   onScale={scaleSel}
                   onRotate={rotateSel}
+                  onAlpha={alphaSel}
                 />
               </AnnSection>
 

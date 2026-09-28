@@ -30,6 +30,7 @@ import {
   scaleLayer,
   rotateLayer,
   drawGizmo,
+  splitStack,
 } from '../src/annotations.js'
 
 const S = () => defaultAnnStyle()
@@ -280,4 +281,26 @@ test('T16o drawGizmo 不抛错，且空/零尺寸图元直接跳过', () => {
   assert.equal(drawGizmo(ctx, null, 5, 26), undefined)
   const empty = beginStroke('line', { x: 10, y: 10 }, { x: 10, y: 10 }, { ...S(), width: 0 })
   assert.equal(drawGizmo(ctx, empty, 5, 26), undefined)
+})
+
+test('T16p splitStack：素材与画线分组，草稿按原位替换 / 末尾追加', () => {
+  const pen = beginStroke('pen', { x: 0, y: 0 }, { x: 5, y: 5 }, S())
+  const mat = makeMaterial('u', '骨相', 10, 10, 40, 40)
+  const arrow = beginStroke('arrow', { x: 0, y: 0 }, { x: 20, y: 0 }, S())
+
+  // 素材永远排在画线前面（垫底），但组内保持栈序
+  const s1 = splitStack([pen, mat, arrow], null)
+  assert.deepEqual(s1.mats.map((x) => x.kind), ['material'])
+  assert.deepEqual(s1.rest.map((x) => x.kind), ['pen', 'arrow'])
+
+  // 拖动中的草稿替换原位（move / scale / rotate 都用这条）
+  const moved = { ...mat, x: 99 }
+  const s2 = splitStack([pen, mat, arrow], { replaceIndex: 1, item: moved })
+  assert.equal(s2.mats[0].x, 99)
+  assert.equal(s2.mats.length, 1)
+
+  // 画线中的草稿追加到末尾
+  const s3 = splitStack([pen], { item: arrow })
+  assert.deepEqual(s3.rest.map((x) => x.kind), ['pen', 'arrow'])
+  assert.deepEqual(splitStack([], null), { mats: [], rest: [] })
 })

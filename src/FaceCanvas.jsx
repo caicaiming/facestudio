@@ -33,11 +33,13 @@ import {
   boxToLocal,
   boxToNatural,
   drawGizmo,
+  drawLayer,
   drawLayers,
   hitHandle,
   hitLayers,
   layerBox,
   makeText,
+  splitStack,
   rotateLayer,
   scaleLayer,
   strokeLength,
@@ -722,6 +724,8 @@ export default function FaceCanvas({
 
   // ---- 标注层 ----
   const annRef = useRef(null)
+  /** 素材单独一层：画在点位的下面，避免整张示意图把 68 点糊住 */
+  const matRef = useRef(null)
   /** 正在画 / 正在拖的图层：只在画布内以 rAF 重绘，绝不进 React state */
   const annDraftRef = useRef(null)
   const annDragRef = useRef(null)
@@ -1192,36 +1196,50 @@ export default function FaceCanvas({
   /** 命中容差（自然像素）：屏幕恒定 ≈9px，缩放后一样好点 */
   const annTol = () => Math.max((imgRef.current?.naturalWidth || 1) * 0.004, 9 * annPx())
 
-  function drawAnn() {
-    const ac = annRef.current
+  /** 标注画布准备：按自然尺寸（受像素上限约束）设尺寸、清空，返回 ctx */
+  const prepAnnCanvas = (cv) => {
     const img = imgRef.current
-    if (!ac || !img) return
+    if (!cv || !img) return null
     const w = img.naturalWidth || img.width
     const h = img.naturalHeight || img.height
-    if (!w || !h) return
+    if (!w || !h) return null
     const ov = w * h > OVERLAY_MAX_AREA ? Math.sqrt(OVERLAY_MAX_AREA / (w * h)) : 1
     const cw = Math.max(1, Math.round(w * ov))
     const ch = Math.max(1, Math.round(h * ov))
-    if (ac.width !== cw || ac.height !== ch) {
-      ac.width = cw
-      ac.height = ch
+    if (cv.width !== cw || cv.height !== ch) {
+      cv.width = cw
+      cv.height = ch
     }
-    const ctx = ac.getContext('2d')
+    const ctx = cv.getContext('2d')
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, cw, ch)
+    ctx.setTransform(ov, 0, 0, ov, 0, 0)
+    return ctx
+  }
+
+  function drawAnn() {
+    const img = imgRef.current
+    if (!img) return
+    const mctx = prepAnnCanvas(matRef.current)
+    const actx = prepAnnCanvas(annRef.current)
     if (!ann?.enabled) return
     const layers = ann.layers || []
     const draft = annDraftRef.current
     if (!layers.length && !draft) return
-    ctx.setTransform(ov, 0, 0, ov, 0, 0)
+
+    // 素材垫在点位下面（不挡 68 点），画线 / 文字压在点上面（指着点位讲）
+    const { mats, rest } = splitStack(layers, draft)
+    const k0 = annK0()
+    if (mctx) for (const it of mats) drawLayer(mctx, it, k0, MAT_IMG_CACHE)
+    if (!actx) return
     // 选中态用派生副本标记，不污染上层数据
-    const marked = layers.map((it) => (it.id === ann.sel ? { ...it, __sel: true } : it))
-    drawLayers(ctx, marked, annK0(), MAT_IMG_CACHE, draft)
-    // 变换手柄：橡皮工具下不出（橡皮是「点一下删掉」，手柄会让人犹豫）
+    const marked = rest.map((it) => (it.id === ann.sel ? { ...it, __sel: true } : it))
+    drawLayers(actx, marked, k0, MAT_IMG_CACHE, null)
+    // 变换手柄画在最上层：选中素材时手柄也要看得见，否则没法调大小
     const sel = layers.find((it) => it.id === ann.sel)
     if (sel && sel.visible !== false && ann.tool !== 'era') {
       const px = annPx()
-      drawGizmo(ctx, sel, 5 * px, 26 * px)
+      drawGizmo(actx, sel, 5 * px, 26 * px)
     }
   }
 
@@ -1685,8 +1703,11 @@ export default function FaceCanvas({
               className="layer warp"
               style={{ display: warpOn ? 'block' : 'none' }}
             />
+            {/* 素材层在点位【下】：示意图像贴纸一样垫在脸上，点位仍清晰可见 */}
+            {ann?.enabled && <canvas ref={matRef} className="layer annot-mats" />}
             <canvas ref={overlayRef} className="layer overlay" />
             <canvas ref={meshRef} className="layer mesh" />
+            {/* 画线 / 文字层在点位【上】：箭头指着点位讲，不能被点位压住 */}
             {ann?.enabled && <canvas ref={annRef} className="layer annot" />}
           </>
         ) : (

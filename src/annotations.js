@@ -742,6 +742,34 @@ export function drawGizmo(ctx, item, hs, lift) {
   ctx.restore()
 }
 
+/**
+ * 把图层栈拆成「素材」与「画线 / 文字」两组（草稿按原位替换或追加）。
+ *
+ * 为什么要拆：素材是一整张贴在脸上的示意图，画在点位的【下一层】才不会把
+ * 68 点位糊住 —— 咨询师一边对点位讲方案、一边看素材，两者都要看得见。
+ * 箭头和文字相反，它们指着点位讲，必须压在点位的【上一层】。
+ */
+export function splitStack(items, draft) {
+  const list = (items || []).slice()
+  if (draft && draft.replaceIndex != null) list[draft.replaceIndex] = draft.item
+  else if (draft?.item) list.push(draft.item)
+  const mats = []
+  const rest = []
+  for (const it of list) {
+    if (!it) continue
+    if (it.kind === 'material') mats.push(it)
+    else rest.push(it)
+  }
+  return { mats, rest }
+}
+
+/** 整栈绘制（导出用）：素材垫底，画线文字在上 —— 与屏幕上的层序一致 */
+export function drawStack(ctx, items, k0, imgCache) {
+  const { mats, rest } = splitStack(items, null)
+  for (const it of mats) drawLayer(ctx, it, k0, imgCache)
+  for (const it of rest) drawLayer(ctx, it, k0, imgCache)
+}
+
 /** 图层显示名（图层面板用） */
 export function layerName(item) {
   const t = ANN_TOOLS.find((x) => x.key === item.kind)

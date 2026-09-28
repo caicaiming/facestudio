@@ -21,6 +21,7 @@ export default function LayerPanel({
   onReorder,
   onScale,
   onRotate,
+  onAlpha,
 }) {
   if (!layers.length) {
     return (
@@ -100,6 +101,18 @@ export default function LayerPanel({
           <span className="ann-sel-name" title={layerName(layers[selIdx])}>
             {layerName(layers[selIdx])}
           </span>
+          {/* 素材这类整张贴纸，压脸时调淡比挪开更省事 */}
+          <label className="ann-sel-alpha" title="该层不透明度">
+            <input
+              type="range"
+              min={15}
+              max={100}
+              step={5}
+              value={Math.round((layers[selIdx].alpha ?? 1) * 100)}
+              onChange={(e) => onAlpha?.(Number(e.target.value) / 100)}
+            />
+            <b>{Math.round((layers[selIdx].alpha ?? 1) * 100)}%</b>
+          </label>
           <span className="ann-layer-ops">
             <button type="button" title="缩小（[）" onClick={() => onScale?.(0.9)}>
               －
