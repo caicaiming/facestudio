@@ -6,17 +6,16 @@
  *
  * 每层三件事：显示 / 隐藏（眼）、选中（点击行）、上移下移与删除。
  * 选中态是给「移动」工具用的 —— 选中后可以用方向键微调位置。
+ *
+ * 本组件只出内容，外壳（卡片标题 / 折叠）由 AnnSection 统一提供。
  */
 
 import { layerName } from './annotations.js'
 
-export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onRemove, onReorder, onClear }) {
+export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onRemove, onReorder }) {
   if (!layers.length) {
     return (
-      <div className="ann-panel">
-        <div className="ann-panel-head">
-          <strong>图层</strong>
-        </div>
+      <div className="ann-body">
         <p className="note">还没有标注。选一个工具在照片上画，或从「素材」里贴一张示意图。</p>
       </div>
     )
@@ -26,14 +25,7 @@ export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onR
   const order = layers.map((_, i) => i).reverse()
 
   return (
-    <div className="ann-panel">
-      <div className="ann-panel-head">
-        <strong>图层</strong>
-        <span className="ann-count">{layers.length}</span>
-        <button type="button" className="btn-mini" onClick={onClear}>
-          清空
-        </button>
-      </div>
+    <div className="ann-body">
       <ul className="ann-layers">
         {order.map((i) => {
           const it = layers[i]

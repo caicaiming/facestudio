@@ -11,12 +11,15 @@
  * 因为话术最终是要【指着照片说】的，脱离照片的话术清单没有意义。
  *
  * 自定义话术存 localStorage（见 phrases.js），跨会话保留。
+ *
+ * 两种形态：`inline` 时作为「话术库」板块的内容嵌在标注面板里（常驻、随手翻），
+ * 否则是弹层（右栏「插入话术标注」入口）。内容同一份，只是外壳不同。
  */
 
 import { useMemo, useState } from 'react'
 import { CUSTOM_CAT, searchPhrases } from './phrases.js'
 
-export default function PhrasePanel({ custom, onPick, onAddCustom, onRemoveCustom, onClose }) {
+export default function PhrasePanel({ custom, onPick, onAddCustom, onRemoveCustom, onClose, inline = false }) {
   const [q, setQ] = useState('')
   const [draft, setDraft] = useState('')
   const groups = useMemo(() => searchPhrases(q, custom), [q, custom])
@@ -27,6 +30,81 @@ export default function PhrasePanel({ custom, onPick, onAddCustom, onRemoveCusto
     if (!v) return
     onAddCustom?.(v)
     setDraft('')
+  }
+
+  const list = (
+    <>
+      {total === 0 && <p className="note">没有匹配的话术。可在下方添加自己的常用语。</p>}
+
+      {groups.map((g) => (
+        <div key={g.cat} className="ph-group">
+          <div className="ph-cat">
+            {g.cat}
+            <span className="ph-num">{g.items.length}</span>
+          </div>
+          <div className="ph-items">
+            {g.items.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className="ph-item"
+                onClick={() => {
+                  onPick?.(t)
+                  onClose?.()
+                }}
+                title="点击插入为文字标注"
+              >
+                {t}
+                {g.cat === CUSTOM_CAT && (
+                  <span
+                    className="ph-del"
+                    role="button"
+                    tabIndex={-1}
+                    title="删除该自定义话术"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemoveCustom?.(t)
+                    }}
+                  >
+                    ×
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  )
+
+  // 嵌进标注面板的「话术库」板块：搜索 + 列表 + 自定义，全部常驻可见
+  if (inline) {
+    return (
+      <div className="ann-body ann-phrase">
+        <input
+          className="ph-search"
+          value={q}
+          placeholder="搜索，如：泪沟 / 鼻部 / 填充"
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <div className="ph-scroll">{list}</div>
+        <div className="ph-add-row">
+          <input
+            className="ph-add"
+            value={draft}
+            placeholder="添加自己的常用话术"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addCustom()
+            }}
+          />
+          <button type="button" className="btn-accent sm" disabled={!draft.trim()} onClick={addCustom}>
+            添加
+          </button>
+        </div>
+        <p className="note">点一条即在照片上落一条文字标注；自定义话术存在本机。</p>
+      </div>
+    )
   }
 
   return (
@@ -49,46 +127,7 @@ export default function PhrasePanel({ custom, onPick, onAddCustom, onRemoveCusto
             autoFocus
           />
 
-          {total === 0 && <p className="note">没有匹配的话术。可在下方添加自己的常用语。</p>}
-
-          {groups.map((g) => (
-            <div key={g.cat} className="ph-group">
-              <div className="ph-cat">
-                {g.cat}
-                <span className="ph-num">{g.items.length}</span>
-              </div>
-              <div className="ph-items">
-                {g.items.map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    className="ph-item"
-                    onClick={() => {
-                      onPick?.(t)
-                      onClose?.()
-                    }}
-                    title="点击插入为文字标注"
-                  >
-                    {t}
-                    {g.cat === CUSTOM_CAT && (
-                      <span
-                        className="ph-del"
-                        role="button"
-                        tabIndex={-1}
-                        title="删除该自定义话术"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onRemoveCustom?.(t)
-                        }}
-                      >
-                        ×
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+          {list}
         </div>
 
         <div className="modal-foot">

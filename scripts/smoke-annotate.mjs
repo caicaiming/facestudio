@@ -13,7 +13,7 @@
  *      ⑥ 橡皮点掉一层、撤销能回来
  *      ⑦ 素材库贴一张 → 素材层进入栈
  *      ⑧ 图层面板：隐藏 / 上移 / 删除
- *      ⑨ 话术库弹层：搜索命中，点条目落成文字层
+ *      ⑨ 话术库板块（常驻、非弹层）：搜索命中，点条目落成文字层
  *      ⑩ 导出：导出的 PNG 尺寸等于原图（含标注合成）
  */
 import { chromium } from 'playwright-core'
@@ -91,7 +91,15 @@ const mid = { x: G.w * 0.5, y: G.h * 0.5 }
 console.log('== 标注模式 ==')
 await page.locator('.seg button', { hasText: '标注' }).click()
 await page.waitForTimeout(200)
-check('①a 工具条出现', (await page.locator('.ann-bar').count()) === 1)
+// 四个板块并列常驻：工具 / 素材 / 图层 / 话术库，默认只展开工具
+check('①a 标注板块区出现', (await page.locator('.ann-board').count()) === 1)
+const sections = await page.locator('.ann-card .ann-fold').allTextContents()
+check(
+  '①a2 四个板块齐全',
+  sections.length === 4 && ['画线工具', '素材', '图层', '话术库'].every((t) => sections.join('|').includes(t)),
+  sections.join(' / '),
+)
+check('①a3 8 个工具按钮', (await page.locator('.ann-tool').count()) === 8)
 check('①b 默认工具为箭头', (await annState()).tool === 'arrow')
 
 // 互斥测试要用「移动」工具：换成画笔/箭头会在空白拖出一笔，
@@ -190,9 +198,9 @@ check('⑥b 撤销恢复', (await layers()).length === before6, `→ ${(await la
 
 // ---------- ⑦ 素材 ----------
 console.log('== 素材 ==')
-await page.locator('.ann-chip', { hasText: '素材' }).click()
+await page.locator('.ann-fold', { hasText: '素材' }).click()
 await page.waitForTimeout(300)
-check('⑦a 素材面板打开', (await page.locator('.ann-mats').count()) === 1)
+check('⑦a 素材板块展开', (await page.locator('.ann-mats').count()) === 1)
 const matCount = await page.locator('.ann-mat').count()
 check('⑦b 10 张素材', matCount === 10, `${matCount} 张`)
 await page.locator('.ann-mat').first().click()
@@ -210,7 +218,7 @@ check(
 
 // ---------- ⑧ 图层面板 ----------
 console.log('== 图层面板 ==')
-await page.locator('.ann-chip', { hasText: '图层' }).click()
+await page.locator('.ann-fold', { hasText: '图层' }).click()
 await page.waitForTimeout(250)
 const rows = await page.locator('.ann-layer').count()
 check('⑧a 图层行数等于层数', rows === (await layers()).length, `${rows} 行`)
@@ -229,11 +237,11 @@ check(
   `${orderBefore.join(',')} → ${orderAfter.join(',')}`,
 )
 
-// ---------- ⑨ 话术库 ----------
+// ---------- ⑨ 话术库（常驻板块，不再是弹层）----------
 console.log('== 话术库 ==')
-await page.locator('.ann-chip.accent', { hasText: '话术库' }).click()
+await page.locator('.ann-fold', { hasText: '话术库' }).click()
 await page.waitForTimeout(250)
-check('⑨a 弹层打开', (await page.locator('.modal').count()) === 1)
+check('⑨a 话术库板块展开（不走弹层）', (await page.locator('.ann-phrase').count()) === 1 && (await page.locator('.modal').count()) === 0)
 await page.locator('.ph-search').fill('泪沟')
 await page.waitForTimeout(200)
 const hits = await page.locator('.ph-item').count()

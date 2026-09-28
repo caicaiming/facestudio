@@ -39,6 +39,7 @@ import {
 } from './detect.js'
 import ZonePanel from './ZonePanel.jsx'
 import PlanPanel from './PlanPanel.jsx'
+import AnnSection from './AnnSection.jsx'
 import AnnotateBar from './AnnotateBar.jsx'
 import LayerPanel from './LayerPanel.jsx'
 import MaterialPanel from './MaterialPanel.jsx'
@@ -52,6 +53,7 @@ import {
   translateLayer,
 } from './annotations.js'
 import {
+  MATERIALS,
   MAT_IMG_CACHE,
   ensureMaterial,
   materialReady,
@@ -222,8 +224,10 @@ export default function App() {
   /** 图层栈：数组序即 z 序，末尾 = 最上层。坐标一律为图片自然像素 */
   const [annLayers, setAnnLayers] = useState([])
   const [annSel, setAnnSel] = useState(null)
-  /** 画布右侧浮层：null | 'layers' | 'materials' */
-  const [annDock, setAnnDock] = useState(null)
+  /** 四个标注板块各自的折叠状态：默认只开「工具」，其余按需展开，不白占画面高度 */
+  const [annFold, setAnnFold] = useState({ tools: false, materials: true, layers: true, phrases: true })
+  const toggleAnnFold = useCallback((k) => setAnnFold((f) => ({ ...f, [k]: !f[k] })), [])
+  /** 右栏「插入话术标注」的弹层入口（板块内的话术库是常驻的，不走弹层） */
   const [phrasesOpen, setPhrasesOpen] = useState(false)
   const [customPhrases, setCustomPhrases] = useState(() => loadCustomPhrases())
   // 撤销 / 重做：整栈快照。标注栈通常只有十几层，快照比逐操作回放省心
@@ -900,6 +904,8 @@ export default function App() {
 
   /** 素材贴到画面中央：高度取画布短边的 60%（与融合工具的出厂值一致） */
   const addMaterial = (m) => {
+    // 从素材板块贴素材时可能还没开标注模式，顺手打开，省得用户回头找开关
+    setAnnOn(true)
     const w = base?.w || 1000
     const h = base?.h || 1000
     const s = (Math.min(w, h) * MAT_INIT_RATIO) / Math.max(m.w, m.h)
@@ -1635,25 +1641,6 @@ export default function App() {
             </div>
           </div>
 
-          {annOn && (
-            <AnnotateBar
-              tool={annTool}
-              style={annStyle}
-              onTool={setAnnTool}
-              onStyle={setAnnStyle}
-              onUndo={undoAnn}
-              onRedo={redoAnn}
-              onClear={clearAnn}
-              canUndo={annPast.length > 0}
-              canRedo={annFuture.length > 0}
-              count={annLayers.length}
-              dock={annDock}
-              onDock={setAnnDock}
-              onPhrases={() => setPhrasesOpen(true)}
-              onExport={exportAnnotated}
-            />
-          )}
-
           <div className="canvas-duo">
             <div
               className="canvas-box card"
@@ -1692,26 +1679,6 @@ export default function App() {
                 onAnnSelect={setAnnSel}
               />
 
-              {/* 浮层贴着画布右侧：调图层 / 挑素材都要看着照片操作，
-                  放进左右栏就得来回瞟。 */}
-              {annDock === 'layers' && (
-                <div className="ann-dock">
-                  <LayerPanel
-                    layers={annLayers}
-                    sel={annSel}
-                    onSelect={setAnnSel}
-                    onToggleVisible={annToggleVisible}
-                    onRemove={annErase}
-                    onReorder={annReorder}
-                    onClear={clearAnn}
-                  />
-                </div>
-              )}
-              {annDock === 'materials' && (
-                <div className="ann-dock">
-                  <MaterialPanel onPick={addMaterial} />
-                </div>
-              )}
             </div>
 
             {/* 预览区：常驻显示形变后的照片。点位/滑块一变，这里立即重绘，无需切视图 */}
@@ -1732,6 +1699,81 @@ export default function App() {
               />
             </div>
           </div>
+
+          {/* ---------------- 标注四板块：工具 / 素材 / 图层 / 话术库 ----------------
+               四个板块并列常驻，谁也不会把谁顶掉 —— 画线的同时能翻话术、能调图层。
+               默认只展开「画线工具」，其余按需展开，免得一上来把画布挤扁。 */}
+          <section className="ann-board">
+            <AnnSection
+              title="画线工具"
+              badge={annLayers.length ? `${annLayers.length} 层` : null}
+              fold={annFold.tools}
+              onFold={() => toggleAnnFold('tools')}
+            >
+              {annOn ? (
+                <AnnotateBar
+                  tool={annTool}
+                  style={annStyle}
+                  onTool={setAnnTool}
+                  onStyle={setAnnStyle}
+                  onUndo={undoAnn}
+                  onRedo={redoAnn}
+                  onClear={clearAnn}
+                  canUndo={annPast.length > 0}
+                  canRedo={annFuture.length > 0}
+                  count={annLayers.length}
+                  onExport={exportAnnotated}
+                />
+              ) : (
+                <div className="ann-off">
+                  <p className="note">点上方工具条的「标注」即可在照片上画箭头、圈范围、写字。</p>
+                  <button type="button" className="btn-accent sm" onClick={() => setAnnOn(true)}>
+                    开启标注
+                  </button>
+                </div>
+              )}
+            </AnnSection>
+
+            <AnnSection
+              title="素材"
+              badge={MATERIALS.length}
+              fold={annFold.materials}
+              onFold={() => toggleAnnFold('materials')}
+            >
+              <MaterialPanel onPick={addMaterial} />
+            </AnnSection>
+
+            <AnnSection
+              title="图层"
+              badge={annLayers.length || null}
+              fold={annFold.layers}
+              onFold={() => toggleAnnFold('layers')}
+            >
+              <LayerPanel
+                layers={annLayers}
+                sel={annSel}
+                onSelect={setAnnSel}
+                onToggleVisible={annToggleVisible}
+                onRemove={annErase}
+                onReorder={annReorder}
+              />
+            </AnnSection>
+
+            <AnnSection
+              title="话术库"
+              badge="7 类"
+              fold={annFold.phrases}
+              onFold={() => toggleAnnFold('phrases')}
+            >
+              <PhrasePanel
+                inline
+                custom={customPhrases}
+                onPick={addPhraseText}
+                onAddCustom={addCustomPhrase}
+                onRemoveCustom={removeCustomPhrase}
+              />
+            </AnnSection>
+          </section>
 
           {warnings.length > 0 && (
             <div className="banner warn">

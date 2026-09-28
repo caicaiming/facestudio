@@ -9,6 +9,8 @@
  *   否则一排十几个控件在 13px 字号下会挤成一片，找不到要调的那个；
  * - 撤销 / 重做按【整栈快照】做（见 App），不逐笔画回放 —— 标注数量少，
  *   快照最省心，且天然覆盖「删除 / 上下移层 / 换样式」这些非绘制操作。
+ *
+ * 本组件只出内容，外壳（卡片标题 / 折叠）由 AnnSection 统一提供。
  */
 
 import { ANN_COLORS, ANN_TOOLS } from './annotations.js'
@@ -34,9 +36,6 @@ export default function AnnotateBar({
   canUndo,
   canRedo,
   count,
-  dock,
-  onDock,
-  onPhrases,
   onExport,
 }) {
   const set = (patch) => onStyle({ ...style, ...patch })
@@ -45,7 +44,7 @@ export default function AnnotateBar({
   const isArrow = tool === 'arrow'
 
   return (
-    <div className="ann-bar">
+    <div className="ann-body">
       <div className="ann-row">
         <div className="ann-group ann-tools" role="group" aria-label="标注工具">
           {ANN_TOOLS.map((t) => (
@@ -153,23 +152,6 @@ export default function AnnotateBar({
         </div>
 
         <div className="ann-group ann-actions">
-          <button
-            type="button"
-            className={`ann-chip${dock === 'layers' ? ' active' : ''}`}
-            onClick={() => onDock(dock === 'layers' ? null : 'layers')}
-          >
-            图层
-          </button>
-          <button
-            type="button"
-            className={`ann-chip${dock === 'materials' ? ' active' : ''}`}
-            onClick={() => onDock(dock === 'materials' ? null : 'materials')}
-          >
-            素材
-          </button>
-          <button type="button" className="ann-chip accent" onClick={onPhrases}>
-            话术库
-          </button>
           <button
             type="button"
             className="ann-chip"
