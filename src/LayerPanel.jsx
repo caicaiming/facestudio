@@ -12,7 +12,16 @@
 
 import { layerName } from './annotations.js'
 
-export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onRemove, onReorder }) {
+export default function LayerPanel({
+  layers,
+  sel,
+  onSelect,
+  onToggleVisible,
+  onRemove,
+  onReorder,
+  onScale,
+  onRotate,
+}) {
   if (!layers.length) {
     return (
       <div className="ann-body">
@@ -23,6 +32,7 @@ export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onR
 
   // 倒序：栈顶（最上层）排最前
   const order = layers.map((_, i) => i).reverse()
+  const selIdx = layers.findIndex((it) => it.id === sel)
 
   return (
     <div className="ann-body">
@@ -85,7 +95,34 @@ export default function LayerPanel({ layers, sel, onSelect, onToggleVisible, onR
           )
         })}
       </ul>
-      <p className="note">点行选中（可用「移动」工具拖动，或方向键微调）；点眼睛临时隐藏。</p>
+      {selIdx >= 0 && (
+        <div className="ann-sel-bar">
+          <span className="ann-sel-name" title={layerName(layers[selIdx])}>
+            {layerName(layers[selIdx])}
+          </span>
+          <span className="ann-layer-ops">
+            <button type="button" title="缩小（[）" onClick={() => onScale?.(0.9)}>
+              －
+            </button>
+            <button type="button" title="放大（]）" onClick={() => onScale?.(1 / 0.9)}>
+              ＋
+            </button>
+            <button type="button" title="逆时针 15°（,）" onClick={() => onRotate?.(-15)}>
+              ↺
+            </button>
+            <button type="button" title="顺时针 15°（.）" onClick={() => onRotate?.(15)}>
+              ↻
+            </button>
+            <button type="button" title="删除（Delete）" onClick={() => onRemove(selIdx)}>
+              🗑
+            </button>
+          </span>
+        </div>
+      )}
+
+      <p className="note">
+        点行选中：拖四角方块改大小、拖顶部圆点旋转；也可 [ ] 缩放、, . 旋转、方向键微调、Delete 删除。
+      </p>
     </div>
   )
 }

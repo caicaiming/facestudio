@@ -2646,3 +2646,29 @@ body {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* ---- 图层面板：选中项的大小 / 旋转快捷条 ----
+   手柄拖是主路径，但小屏上手指不好抓 5px 的小方块，按钮兜底。 */
+.ann-sel-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+}
+
+.ann-sel-name {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #bfdbfe;
+  font-size: 12px;
+}
+
+.ann-sel-bar .ann-layer-ops button {
+  font-size: 13px;
+}

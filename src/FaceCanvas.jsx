@@ -28,10 +28,18 @@ import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
 import { DRAG_GAINS, DEFAULT_DRAG_GAIN_KEY, dampDelta, effectiveGain } from './drag.js'
 import {
   DRAW_TOOLS,
+  HANDLE_DIRS,
   beginStroke,
+  boxToLocal,
+  boxToNatural,
+  drawGizmo,
   drawLayers,
+  hitHandle,
   hitLayers,
+  layerBox,
   makeText,
+  rotateLayer,
+  scaleLayer,
   strokeLength,
   translateLayer,
   updateStroke,
@@ -1173,14 +1181,16 @@ export default function FaceCanvas({
     return disp > 0 ? w / disp : 1
   }
 
-  /** 命中容差（自然像素）：屏幕恒定 ≈9px，缩放后一样好点 */
-  const annTol = () => {
+  /** 1 屏幕像素 = 多少自然像素（手柄、容差都要「屏幕恒定」用） */
+  const annPx = () => {
     const img = imgRef.current
     const w = img?.naturalWidth || img?.width || 1
     const disp = img?.getBoundingClientRect().width || 0
-    const k = disp > 0 ? w / disp : 1
-    return Math.max(w * 0.004, 9 * k)
+    return disp > 0 ? w / disp : 1
   }
+
+  /** 命中容差（自然像素）：屏幕恒定 ≈9px，缩放后一样好点 */
+  const annTol = () => Math.max((imgRef.current?.naturalWidth || 1) * 0.004, 9 * annPx())
 
   function drawAnn() {
     const ac = annRef.current
@@ -1207,6 +1217,12 @@ export default function FaceCanvas({
     // 选中态用派生副本标记，不污染上层数据
     const marked = layers.map((it) => (it.id === ann.sel ? { ...it, __sel: true } : it))
     drawLayers(ctx, marked, annK0(), MAT_IMG_CACHE, draft)
+    // 变换手柄：橡皮工具下不出（橡皮是「点一下删掉」，手柄会让人犹豫）
+    const sel = layers.find((it) => it.id === ann.sel)
+    if (sel && sel.visible !== false && ann.tool !== 'era') {
+      const px = annPx()
+      drawGizmo(ctx, sel, 5 * px, 26 * px)
+    }
   }
 
   // 标注栈 / 显示尺寸变化 → 重画；素材图未解码时先加载，完成后再补一次
@@ -1249,10 +1265,55 @@ export default function FaceCanvas({
     onAnnAdd?.(makeText(t.nat.x, t.nat.y, v, ann.style))
   }
 
+  /**
+   * 选中层的手柄命中。橡皮工具下不参与（那会儿也不画手柄）。
+   * 返回 { id, index, item } 或 null。
+   */
+  const annHandleAt = (p) => {
+    const A = ann
+    if (!A?.enabled || !A.sel || A.tool === 'era') return null
+    const layers = A.layers || []
+    const i = layers.findIndex((it) => it.id === A.sel)
+    if (i < 0) return null
+    const it = layers[i]
+    if (it.visible === false) return null
+    const id = hitHandle(p, it, annTol())
+    return id ? { id, index: i, item: it } : null
+  }
+
+  /** 手柄 → 鼠标指针样式（拖角拖边的方向感全靠这个） */
+  const handleCursor = (id) => {
+    if (id === 'rot') return 'grab'
+    const [sx, sy] = HANDLE_DIRS[id] || [0, 0]
+    if (sx === 0 || sy === 0) return sx === 0 ? 'ns-resize' : 'ew-resize'
+    return sx * sy > 0 ? 'nwse-resize' : 'nesw-resize'
+  }
+
   const annDown = (e, p) => {
     const A = ann
     const layers = A.layers || []
     const tol = annTol()
+
+    // 手柄优先：压在手柄上就是要变形，此时哪怕手里拿的是画笔也不该起新笔画
+    const h = annHandleAt(p)
+    if (h) {
+      e.preventDefault()
+      if (h.id === 'rot') {
+        const b = layerBox(h.item)
+        annDragRef.current = {
+          kind: 'rotate',
+          index: h.index,
+          base: h.item,
+          cx: b.cx,
+          cy: b.cy,
+          a0: Math.atan2(p.y - b.cy, p.x - b.cx),
+        }
+      } else {
+        annDragRef.current = { kind: 'scale', index: h.index, base: h.item, box: layerBox(h.item), id: h.id }
+      }
+      annDraftRef.current = { replaceIndex: h.index, item: h.item }
+      return
+    }
 
     if (A.tool === 'era') {
       const i = hitLayers(p, layers, tol)
@@ -1302,6 +1363,42 @@ export default function FaceCanvas({
       const moved = translateLayer(d.base, p.x - d.ox, p.y - d.oy)
       annDraftRef.current = { replaceIndex: d.index, item: moved }
       drawAnn()
+      return
+    }
+    if (d.kind === 'scale') {
+      const [hx, hy] = HANDLE_DIRS[d.id] || [0, 0]
+      const box = d.box
+      const lp = boxToLocal(box, p)
+      const minDim = 8 * annPx()
+      let sx = 1
+      let sy = 1
+      if (hx !== 0) sx = ((lp.x + (hx * box.w) / 2) * hx) / box.w
+      if (hy !== 0) sy = ((lp.y + (hy * box.h) / 2) * hy) / box.h
+      // 角手柄默认等比（改大小最常用），边手柄默认单轴拉伸；Shift 取反
+      const corner = hx !== 0 && hy !== 0
+      const uniform = corner ? !e.shiftKey : e.shiftKey
+      if (uniform) {
+        const s = Math.max((sx + sy) / 2, minDim / Math.max(box.w, box.h))
+        sx = s
+        sy = s
+      } else {
+        if (hx !== 0) sx = Math.max(sx, minDim / Math.max(box.w, 1))
+        if (hy !== 0) sy = Math.max(sy, minDim / Math.max(box.h, 1))
+      }
+      const anchor = boxToNatural(box, (-hx * box.w) / 2, (-hy * box.h) / 2)
+      const scaled = scaleLayer(d.base, sx, sy, anchor, box.rot)
+      annDraftRef.current = { replaceIndex: d.index, item: scaled }
+      drawAnn()
+      return
+    }
+    if (d.kind === 'rotate') {
+      const a = Math.atan2(p.y - d.cy, p.x - d.cx)
+      let deg = ((a - d.a0) * 180) / Math.PI
+      // Shift 吸附 15°：讲解用的示意图大多是正交 / 45°，随手转反而歪
+      if (e.shiftKey) deg = Math.round(deg / 15) * 15
+      const rotated = rotateLayer(d.base, deg)
+      annDraftRef.current = { replaceIndex: d.index, item: rotated }
+      drawAnn()
     }
   }
 
@@ -1315,7 +1412,7 @@ export default function FaceCanvas({
     if (d.kind === 'draw') {
       // 误触保护：点一下就抬笔（长度≈0）不上栈
       if (strokeLength(d.item) >= Math.max(2, 4 * annK0())) onAnnAdd?.(d.item)
-    } else if (d.kind === 'move' && draft?.item) {
+    } else if (d.kind !== 'draw' && draft?.item) {
       onAnnUpdate?.(d.index, draft.item)
     }
   }
@@ -1462,6 +1559,11 @@ export default function FaceCanvas({
       annMove(e, p)
       if (annDragRef.current) return
       // 悬停光标：让「这一笔会画在 / 抓到什么」在下笔前就可预期
+      const h = annHandleAt(p)
+      if (h) {
+        e.currentTarget.style.cursor = handleCursor(h.id)
+        return
+      }
       const over = hitLayers(p, ann.layers || [], annTol()) >= 0
       const cur =
         ann.tool === 'move' ? (over ? 'grab' : 'default')

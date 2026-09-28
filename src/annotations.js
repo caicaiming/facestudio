@@ -195,6 +195,201 @@ export function textExtent(item) {
   return { w, h: fs * 1.25 }
 }
 
+/** 绕 c 点旋转 deg 度（顺时针为正） */
+export function rotatePoint(q, c, deg) {
+  const r = (deg * Math.PI) / 180
+  const co = Math.cos(r)
+  const si = Math.sin(r)
+  const dx = q.x - c.x
+  const dy = q.y - c.y
+  return { x: c.x + dx * co - dy * si, y: c.y + dx * si + dy * co }
+}
+
+/**
+ * 变换框：{ cx, cy, w, h, rot }（自然像素，rot 为度）。
+ *
+ * 与 layerBounds 的分工：bounds 只给轴对齐外包（命中测试 / 选中虚线框用），
+ * 这里给【旋转后中心 + 本地尺寸】，缩放手柄必须挂在旋转后的框上，否则手柄
+ * 会和图形分离 —— 转过的素材尤其明显。
+ */
+export function layerBox(item) {
+  if (!item) return null
+  const pad = item.kind === 'material' ? 0 : item.width || 0
+  if (item.kind === 'pen') {
+    let x1 = Infinity
+    let y1 = Infinity
+    let x2 = -Infinity
+    let y2 = -Infinity
+    for (const p of item.pts) {
+      x1 = Math.min(x1, p.x)
+      y1 = Math.min(y1, p.y)
+      x2 = Math.max(x2, p.x)
+      y2 = Math.max(y2, p.y)
+    }
+    if (!Number.isFinite(x1)) return null
+    return { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, w: x2 - x1 + pad * 2, h: y2 - y1 + pad * 2, rot: 0 }
+  }
+  if (item.kind === 'text') {
+    const e = textExtent(item)
+    return { cx: item.x + e.w / 2, cy: item.y - e.h / 2, w: e.w, h: e.h, rot: item.rot || 0 }
+  }
+  if (item.kind === 'material') {
+    return { cx: item.x, cy: item.y, w: item.w, h: item.h, rot: item.rot || 0 }
+  }
+  const x1 = Math.min(item.x1, item.x2)
+  const y1 = Math.min(item.y1, item.y2)
+  const x2 = Math.max(item.x1, item.x2)
+  const y2 = Math.max(item.y1, item.y2)
+  return {
+    cx: (x1 + x2) / 2,
+    cy: (y1 + y2) / 2,
+    w: x2 - x1 + pad * 2,
+    h: y2 - y1 + pad * 2,
+    rot: item.rot || 0,
+  }
+}
+
+/** 手柄 id → 局部方向符号（[-1|0|1, -1|0|1]），0 表示该轴不动 */
+export const HANDLE_DIRS = {
+  nw: [-1, -1],
+  n: [0, -1],
+  ne: [1, -1],
+  e: [1, 0],
+  se: [1, 1],
+  s: [0, 1],
+  sw: [-1, 1],
+  w: [-1, 0],
+}
+
+export const HANDLES = Object.keys(HANDLE_DIRS)
+
+/** 本地坐标（相对框心、未旋转）→ 自然坐标 */
+export function boxToNatural(box, lx, ly) {
+  const r = (box.rot * Math.PI) / 180
+  const co = Math.cos(r)
+  const si = Math.sin(r)
+  return { x: box.cx + lx * co - ly * si, y: box.cy + lx * si + ly * co }
+}
+
+/** 自然坐标 → 本地坐标（相对框心、按 rot 反旋） */
+export function boxToLocal(box, p) {
+  const r = (-box.rot * Math.PI) / 180
+  const co = Math.cos(r)
+  const si = Math.sin(r)
+  const dx = p.x - box.cx
+  const dy = p.y - box.cy
+  return { x: dx * co - dy * si, y: dx * si + dy * co }
+}
+
+/**
+ * 变换手柄的自然坐标（8 个缩放 + 1 个旋转）。
+ * lift：旋转手柄再往上抬的距离（自然像素，调用方按屏幕像素折算）。
+ */
+export function handlePoints(item, lift = 0) {
+  const box = layerBox(item)
+  if (!box) return []
+  const out = HANDLES.map((id) => {
+    const [sx, sy] = HANDLE_DIRS[id]
+    return { id, ...boxToNatural(box, (sx * box.w) / 2, (sy * box.h) / 2) }
+  })
+  out.push({ id: 'rot', ...boxToNatural(box, 0, -box.h / 2 - lift) })
+  return out
+}
+
+/** 命中手柄返回 id（'nw'…'w' / 'rot'），否则 null。旋转手柄优先（在框外）。 */
+export function hitHandle(p, item, tol) {
+  if (!item || item.visible === false) return null
+  const pts = handlePoints(item, tol * 3)
+  for (let i = pts.length - 1; i >= 0; i--) {
+    if (Math.hypot(p.x - pts[i].x, p.y - pts[i].y) <= tol * 1.6) return pts[i].id
+  }
+  return null
+}
+
+/** 数值夹取 */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+
+/**
+ * 缩放图层：绕 anchor（自然坐标）在 rot 局部坐标系下按 sx / sy 缩放。
+ *
+ * 各类别的「大小」字段同步缩放，否则会出现「框变大了、线还是那么细」的怪相：
+ * - 线宽 / 箭头翼长按几何平均缩放（夹在合理区间，避免缩到看不见或糊成一片）；
+ * - 文字按几何平均改字号（文字只有 font 一个尺度，无法非等比）；
+ * - 素材改 w / h。
+ */
+export function scaleLayer(item, sx, sy, anchor, rot = 0) {
+  if (!item) return item
+  const r = (rot * Math.PI) / 180
+  const co = Math.cos(r)
+  const si = Math.sin(r)
+  const f = (q) => {
+    const dx = q.x - anchor.x
+    const dy = q.y - anchor.y
+    const lx = dx * co + dy * si
+    const ly = -dx * si + dy * co
+    const nx = lx * sx
+    const ny = ly * sy
+    return { x: anchor.x + nx * co - ny * si, y: anchor.y + nx * si + ny * co }
+  }
+  const avg = Math.sqrt(Math.abs(sx * sy)) || 1
+  const w = clamp((item.width || 1) * avg, 1, 400)
+
+  if (item.kind === 'pen') {
+    return { ...item, pts: item.pts.map(f), width: w }
+  }
+  if (item.kind === 'line' || item.kind === 'arrow') {
+    const a = f({ x: item.x1, y: item.y1 })
+    const b = f({ x: item.x2, y: item.y2 })
+    const next = { ...item, x1: a.x, y1: a.y, x2: b.x, y2: b.y, width: w }
+    if (item.kind === 'arrow') next.arrowH = clamp((item.arrowH || 24) * avg, 6, 400)
+    return next
+  }
+  if (item.kind === 'rect' || item.kind === 'ellipse') {
+    const a = f({ x: item.x1, y: item.y1 })
+    const b = f({ x: item.x2, y: item.y2 })
+    return { ...item, x1: a.x, y1: a.y, x2: b.x, y2: b.y, width: w }
+  }
+  if (item.kind === 'text') {
+    const o = f({ x: item.x, y: item.y })
+    return { ...item, x: o.x, y: o.y, font: clamp(item.font * avg, 8, 400) }
+  }
+  if (item.kind === 'material') {
+    const o = f({ x: item.x, y: item.y })
+    return {
+      ...item,
+      x: o.x,
+      y: o.y,
+      w: Math.max(8, item.w * Math.abs(sx)),
+      h: Math.max(8, item.h * Math.abs(sy)),
+    }
+  }
+  return item
+}
+
+/**
+ * 旋转图层（顺时针 deg 度）。
+ *
+ * 素材 / 矩形 / 椭圆 / 文字带 rot 字段，绘制时整体旋转；
+ * 线段与画笔是「两个点 / 一串点」，直接把角度烤进坐标更省事 ——
+ * 一条线绕中点转端点即可，不需要额外字段，命中测试也天然跟着走。
+ */
+export function rotateLayer(item, deg) {
+  if (!item) return item
+  const d = ((deg % 360) + 360) % 360
+  if (item.kind === 'material' || item.kind === 'text' || item.kind === 'rect' || item.kind === 'ellipse') {
+    return { ...item, rot: (((item.rot || 0) + d) % 360 + 360) % 360 }
+  }
+  const box = layerBox(item)
+  if (!box) return item
+  const c = { x: box.cx, y: box.cy }
+  if (item.kind === 'pen') {
+    return { ...item, pts: item.pts.map((q) => rotatePoint(q, c, d)) }
+  }
+  const a = rotatePoint({ x: item.x1, y: item.y1 }, c, d)
+  const b = rotatePoint({ x: item.x2, y: item.y2 }, c, d)
+  return { ...item, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+}
+
 /** 图层包围盒（自然像素）。文字用估宽，画笔含线宽余量。 */
 export function layerBounds(item) {
   if (!item) return null
@@ -254,6 +449,11 @@ export function hitLayer(p, item, tol) {
     return segDist(p.x, p.y, item.x1, item.y1, item.x2, item.y2) <= tol + item.width / 2
   }
   if (item.kind === 'rect' || item.kind === 'ellipse') {
+    // 旋转过的图形：把点反旋回本地系再测，否则「看得见的图形点不中」
+    if (item.rot) {
+      const c = { x: (item.x1 + item.x2) / 2, y: (item.y1 + item.y2) / 2 }
+      p = rotatePoint(p, c, -(item.rot || 0))
+    }
     const x1 = Math.min(item.x1, item.x2)
     const y1 = Math.min(item.y1, item.y2)
     const x2 = Math.max(item.x1, item.x2)
@@ -276,6 +476,7 @@ export function hitLayer(p, item, tol) {
     return norm > 0.8 || nearX || nearY
   }
   if (item.kind === 'text') {
+    if (item.rot) p = rotatePoint(p, { x: item.x, y: item.y }, -(item.rot || 0))
     const b = layerBounds(item)
     return p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol
   }
@@ -379,11 +580,19 @@ export function drawLayer(ctx, item, k0, imgCache) {
     const w = Math.abs(item.x2 - item.x1)
     const h = Math.abs(item.y2 - item.y1)
     if (w < 1 || h < 1) return
+    const cx = x + w / 2
+    const cy = y + h / 2
+    ctx.save()
+    if (item.rot) {
+      ctx.translate(cx, cy)
+      ctx.rotate((item.rot * Math.PI) / 180)
+      ctx.translate(-cx, -cy)
+    }
     ctx.beginPath()
     if (item.kind === 'rect') {
       ctx.rect(x, y, w, h)
     } else {
-      ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
+      ctx.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2)
     }
     if (item.fill) {
       ctx.fillStyle = item.color
@@ -394,10 +603,17 @@ export function drawLayer(ctx, item, k0, imgCache) {
     ctx.stroke()
     ctx.setLineDash([])
     ctx.globalAlpha = 1
+    ctx.restore()
     return
   }
   if (item.kind === 'text') {
     const fs = px(item.font)
+    ctx.save()
+    if (item.rot) {
+      ctx.translate(item.x, item.y)
+      ctx.rotate((item.rot * Math.PI) / 180)
+      ctx.translate(-item.x, -item.y)
+    }
     ctx.font = `${item.bold ? '700 ' : ''}${fs}px system-ui, "Microsoft YaHei", sans-serif`
     ctx.textAlign = 'left'
     ctx.textBaseline = 'alphabetic'
@@ -420,6 +636,7 @@ export function drawLayer(ctx, item, k0, imgCache) {
       ctx.fillText(line, item.x, ly)
     })
     ctx.globalAlpha = 1
+    ctx.restore()
     return
   }
   if (item.kind === 'material') {
@@ -469,6 +686,60 @@ export function drawLayers(ctx, items, k0, imgCache, draft) {
     drawLayer(ctx, it, k0, imgCache)
   }
   if (draft && draft.replaceIndex == null) drawLayer(ctx, draft.item, k0, imgCache)
+}
+
+/**
+ * 选中态的变换手柄（8 个缩放方块 + 1 个旋转圆点）。
+ *
+ * hs = 手柄半边长、lift = 旋转点抬升距离（均为自然像素，由调用方按当前
+ * 缩放折算，保证屏幕上恒定大小 —— 放大看细节时手柄不会变成大方块）。
+ */
+export function drawGizmo(ctx, item, hs, lift) {
+  const box = layerBox(item)
+  if (!box || box.w < 1e-6 || box.h < 1e-6) return
+  const pts = handlePoints(item, lift)
+  const at = (id) => pts.find((q) => q.id === id)
+  ctx.save()
+  ctx.setLineDash([])
+  ctx.lineJoin = 'round'
+
+  // 框：沿四角连线，旋转过的图形框也跟着斜
+  ctx.strokeStyle = 'rgba(56,189,248,0.95)'
+  ctx.lineWidth = Math.max(1, hs * 0.3)
+  ctx.beginPath()
+  const corners = ['nw', 'ne', 'se', 'sw'].map(at)
+  ctx.moveTo(corners[0].x, corners[0].y)
+  for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].x, corners[i].y)
+  ctx.closePath()
+  ctx.stroke()
+
+  // 旋转手柄的引线
+  const rp = at('rot')
+  const np = at('n')
+  ctx.beginPath()
+  ctx.moveTo(np.x, np.y)
+  ctx.lineTo(rp.x, rp.y)
+  ctx.stroke()
+
+  ctx.lineWidth = Math.max(1, hs * 0.28)
+  for (const q of pts) {
+    if (q.id === 'rot') {
+      ctx.beginPath()
+      ctx.arc(q.x, q.y, hs * 1.15, 0, Math.PI * 2)
+      ctx.fillStyle = '#38bdf8'
+      ctx.fill()
+      ctx.strokeStyle = '#0b1220'
+      ctx.stroke()
+      continue
+    }
+    ctx.beginPath()
+    ctx.rect(q.x - hs, q.y - hs, hs * 2, hs * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#0b1220'
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 /** 图层显示名（图层面板用） */

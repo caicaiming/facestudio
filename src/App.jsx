@@ -48,8 +48,11 @@ import {
   MAT_INIT_RATIO,
   defaultAnnStyle,
   drawLayers,
+  layerBox,
   makeMaterial,
   makeText,
+  rotateLayer,
+  scaleLayer,
   translateLayer,
 } from './annotations.js'
 import {
@@ -898,6 +901,34 @@ export default function App() {
     [commitAnn],
   )
 
+  /**
+   * 缩放当前选中层（绕自身中心等比）。
+   * 素材 / 箭头 / 框 / 文字 / 画笔走的都是同一套 scaleLayer，区别只在各类别
+   * 的「尺寸字段」不同（w/h、arrowH、font、线宽），模型内部已分别处理。
+   */
+  const scaleSel = useCallback(
+    (f) => {
+      const layers = annLayersRef.current
+      const i = layers.findIndex((x) => x.id === annSel)
+      if (i < 0) return
+      const it = layers[i]
+      const box = layerBox(it)
+      if (box) annUpdate(i, scaleLayer(it, f, f, { x: box.cx, y: box.cy }, box.rot))
+    },
+    [annSel, annUpdate],
+  )
+
+  /** 旋转当前选中层（素材/框/文字存 rot，线段与画笔把角度烤进坐标） */
+  const rotateSel = useCallback(
+    (deg) => {
+      const layers = annLayersRef.current
+      const i = layers.findIndex((x) => x.id === annSel)
+      if (i < 0) return
+      annUpdate(i, rotateLayer(layers[i], deg))
+    },
+    [annSel, annUpdate],
+  )
+
   const undoAnn = () => {
     if (annPast.length === 0) return
     const prev = annPast[annPast.length - 1]
@@ -1010,22 +1041,21 @@ export default function App() {
         annUpdate(i, translateLayer(it, dx, dy))
         return
       }
-      // 素材专用：[] 缩放、, . 旋转
-      if (it.kind === 'material') {
-        if (e.key === '[' || e.key === ']') {
-          e.preventDefault()
-          const f = e.key === '[' ? 0.9 : 1 / 0.9
-          annUpdate(i, { ...it, w: Math.round(it.w * f), h: Math.round(it.h * f) })
-        } else if (e.key === ',' || e.key === '.') {
-          e.preventDefault()
-          annUpdate(i, { ...it, rot: ((it.rot || 0) + (e.key === ',' ? -15 : 15)) % 360 })
-        }
+      // 缩放 / 旋转：任何图层都支持（素材、箭头、框、文字、画笔一视同仁）
+      if (e.key === '[' || e.key === ']') {
+        e.preventDefault()
+        scaleSel(e.key === '[' ? 0.9 : 1 / 0.9)
+        return
+      }
+      if (e.key === ',' || e.key === '.') {
+        e.preventDefault()
+        rotateSel(e.key === ',' ? -15 : 15)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annOn, annSel, annPast, annFuture, annLayers, base])
+  }, [annOn, annSel, annPast, annFuture, annLayers, base, scaleSel, rotateSel])
 
   /** 传给画布的标注状态（预览区不带标注：一份栈只服务一张照片） */
   const ann = useMemo(
@@ -1829,6 +1859,8 @@ export default function App() {
                   onToggleVisible={annToggleVisible}
                   onRemove={annErase}
                   onReorder={annReorder}
+                  onScale={scaleSel}
+                  onRotate={rotateSel}
                 />
               </AnnSection>
 
