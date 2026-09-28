@@ -1,6 +1,7 @@
-/** 临时诊断：多分辨率下的布局问题 */
-import { chromium } from 'playwright-core'
-import path from 'node:path'
+/**
+ * diag-responsive.mjs —— 多分辨率布局诊断：截整页图 + 报告溢出/裁剪/画布尺寸
+ * 用法: node scripts/diag-responsive.mjs （需 dev server 在 5173）
+ */
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const browser = await chromium.launch({ executablePath: CHROME, args: ['--use-gl=swiftshader'] })
