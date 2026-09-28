@@ -93,7 +93,7 @@ await page.locator('.seg button', { hasText: '标注' }).click()
 await page.waitForTimeout(200)
 // 四个板块并列常驻：工具 / 素材 / 图层 / 话术库，默认只展开工具
 check('①a 标注板块区出现', (await page.locator('.ann-board').count()) === 1)
-const sections = await page.locator('.ann-card .ann-fold').allTextContents()
+const sections = await page.locator('.ann-section .ann-fold').allTextContents()
 check(
   '①a2 四个板块齐全',
   sections.length === 4 && ['画线工具', '素材', '图层', '话术库'].every((t) => sections.join('|').includes(t)),

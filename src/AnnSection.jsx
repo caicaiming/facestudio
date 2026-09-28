@@ -14,8 +14,8 @@
 
 export default function AnnSection({ title, badge, fold, onFold, disabled, children }) {
   return (
-    <section className={`card ann-card${fold ? ' folded' : ''}${disabled ? ' off' : ''}`}>
-      <h2 className="card-title ann-card-title">
+    <section className={`ann-section${fold ? ' folded' : ''}${disabled ? ' off' : ''}`}>
+      <h2 className="card-title ann-sec-title">
         <button
           type="button"
           className="ann-fold"
@@ -28,7 +28,7 @@ export default function AnnSection({ title, badge, fold, onFold, disabled, child
           {badge != null && badge !== '' && <span className="ann-count">{badge}</span>}
         </button>
       </h2>
-      {!fold && <div className="ann-card-body">{children}</div>}
+      {!fold && <div className="ann-sec-body">{children}</div>}
     </section>
   )
 }

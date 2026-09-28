@@ -1228,8 +1228,9 @@ export default function App() {
       )}
 
       <main className="layout">
-        {/* ---------------- 左栏：参数滑块 ---------------- */}
+        {/* ---------------- 左栏：点位调整（整个功能域） ---------------- */}
         <aside className="col-left card">
+          <h2 className="group-head">点位调整</h2>
           {/* ---------------- 基准点校准（决定全部点位的第一层） ---------------- */}
           <h2 className="card-title">基准点校准</h2>
           <div className="frame-block">
@@ -1700,80 +1701,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* ---------------- 标注四板块：工具 / 素材 / 图层 / 话术库 ----------------
-               四个板块并列常驻，谁也不会把谁顶掉 —— 画线的同时能翻话术、能调图层。
-               默认只展开「画线工具」，其余按需展开，免得一上来把画布挤扁。 */}
-          <section className="ann-board">
-            <AnnSection
-              title="画线工具"
-              badge={annLayers.length ? `${annLayers.length} 层` : null}
-              fold={annFold.tools}
-              onFold={() => toggleAnnFold('tools')}
-            >
-              {annOn ? (
-                <AnnotateBar
-                  tool={annTool}
-                  style={annStyle}
-                  onTool={setAnnTool}
-                  onStyle={setAnnStyle}
-                  onUndo={undoAnn}
-                  onRedo={redoAnn}
-                  onClear={clearAnn}
-                  canUndo={annPast.length > 0}
-                  canRedo={annFuture.length > 0}
-                  count={annLayers.length}
-                  onExport={exportAnnotated}
-                />
-              ) : (
-                <div className="ann-off">
-                  <p className="note">点上方工具条的「标注」即可在照片上画箭头、圈范围、写字。</p>
-                  <button type="button" className="btn-accent sm" onClick={() => setAnnOn(true)}>
-                    开启标注
-                  </button>
-                </div>
-              )}
-            </AnnSection>
-
-            <AnnSection
-              title="素材"
-              badge={MATERIALS.length}
-              fold={annFold.materials}
-              onFold={() => toggleAnnFold('materials')}
-            >
-              <MaterialPanel onPick={addMaterial} />
-            </AnnSection>
-
-            <AnnSection
-              title="图层"
-              badge={annLayers.length || null}
-              fold={annFold.layers}
-              onFold={() => toggleAnnFold('layers')}
-            >
-              <LayerPanel
-                layers={annLayers}
-                sel={annSel}
-                onSelect={setAnnSel}
-                onToggleVisible={annToggleVisible}
-                onRemove={annErase}
-                onReorder={annReorder}
-              />
-            </AnnSection>
-
-            <AnnSection
-              title="话术库"
-              badge="7 类"
-              fold={annFold.phrases}
-              onFold={() => toggleAnnFold('phrases')}
-            >
-              <PhrasePanel
-                inline
-                custom={customPhrases}
-                onPick={addPhraseText}
-                onAddCustom={addCustomPhrase}
-                onRemoveCustom={removeCustomPhrase}
-              />
-            </AnnSection>
-          </section>
+          {/* 中栏只留照片本身 —— 标注组曾放在画布下方，实测把画布压矮一大截，
+              照片是主角，任何常驻面板都不该抢它的高度（现移入右栏「标注」组）。 */}
 
           {warnings.length > 0 && (
             <div className="banner warn">
@@ -1784,8 +1713,86 @@ export default function App() {
           )}
         </section>
 
-        {/* ---------------- 右栏：指标与处方 ---------------- */}
+        {/* ---------------- 右栏：标注组 + 指标与处方 ----------------
+             按功能域分区：【标注】整组在上，【测量与方案】在下，
+             组内各自折叠，一眼看出"哪几块是一伙的"。 */}
         <aside className="col-right">
+          <h2 className="group-head ann">标注</h2>
+          <div className="card ann-group">
+            <section className="ann-board">
+              <AnnSection
+                title="画线工具"
+                badge={annLayers.length ? `${annLayers.length} 层` : null}
+                fold={annFold.tools}
+                onFold={() => toggleAnnFold('tools')}
+              >
+                {annOn ? (
+                  <AnnotateBar
+                    tool={annTool}
+                    style={annStyle}
+                    onTool={setAnnTool}
+                    onStyle={setAnnStyle}
+                    onUndo={undoAnn}
+                    onRedo={redoAnn}
+                    onClear={clearAnn}
+                    canUndo={annPast.length > 0}
+                    canRedo={annFuture.length > 0}
+                    count={annLayers.length}
+                    onExport={exportAnnotated}
+                  />
+                ) : (
+                  <div className="ann-off">
+                    <p className="note">点上方工具条的「标注」即可在照片上画箭头、圈范围、写字。</p>
+                    <button type="button" className="btn-accent sm" onClick={() => setAnnOn(true)}>
+                      开启标注
+                    </button>
+                  </div>
+                )}
+              </AnnSection>
+
+              <AnnSection
+                title="素材"
+                badge={MATERIALS.length}
+                fold={annFold.materials}
+                onFold={() => toggleAnnFold('materials')}
+              >
+                <MaterialPanel onPick={addMaterial} />
+              </AnnSection>
+
+              <AnnSection
+                title="图层"
+                badge={annLayers.length || null}
+                fold={annFold.layers}
+                onFold={() => toggleAnnFold('layers')}
+              >
+                <LayerPanel
+                  layers={annLayers}
+                  sel={annSel}
+                  onSelect={setAnnSel}
+                  onToggleVisible={annToggleVisible}
+                  onRemove={annErase}
+                  onReorder={annReorder}
+                />
+              </AnnSection>
+
+              <AnnSection
+                title="话术库"
+                badge="7 类"
+                fold={annFold.phrases}
+                onFold={() => toggleAnnFold('phrases')}
+              >
+                <PhrasePanel
+                  inline
+                  custom={customPhrases}
+                  onPick={addPhraseText}
+                  onAddCustom={addCustomPhrase}
+                  onRemoveCustom={removeCustomPhrase}
+                />
+              </AnnSection>
+            </section>
+          </div>
+
+          <h2 className="group-head">测量与方案</h2>
           <div className="card">
             <h2 className="card-title">综合评分</h2>
             {analysis && analysis.score ? (

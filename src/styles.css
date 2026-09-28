@@ -2127,35 +2127,52 @@ body {
   gap: 6px;
 }
 
-/* ---- 画布下方的四个独立板块（工具 / 素材 / 图层 / 话术库）----
-   并列常驻，不互相顶替：画到一半想配一句话时，话术库一直就在旁边。
-   auto-fit 让宽屏一行四个、窄屏自动折行；板块内部再各自滚动，
-   这样无论折成几行，画布都不会被挤到看不见。 */
+/* ---- 功能域分组标题：左=点位调整，右=标注 / 测量与方案 ----
+   同域的板块归在一块，跨域一眼能分开。左侧色条区分域。 */
+.group-head {
+  margin: 2px 0 0;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-left: 3px solid #6b7280;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.group-head.ann {
+  border-left-color: var(--accent);
+  color: #bfdbfe;
+}
+
+/* ---- 标注组：工具 / 素材 / 图层 / 话术库 ----
+   纵向排在右栏的一张卡里（不放画布下方：实测会把照片压矮一大截）。
+   四个小节并列常驻、各自折叠，互不顶替。 */
 .ann-board {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
-  gap: 10px;
-  align-items: start;
-  max-height: 300px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.ann-board::-webkit-scrollbar {
-  width: 8px;
+.ann-group {
+  padding: 8px;
 }
 
-.ann-board::-webkit-scrollbar-thumb {
-  border-radius: 4px;
-  background: #2c2c34;
+.ann-section {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
-.ann-card {
-  padding: 10px 12px;
+.ann-section.folded {
+  background: transparent;
 }
 
 /* 标题即折叠开关：整行可点，收起后标题仍在，板块不会「消失」 */
-.ann-card-title {
+.ann-sec-title {
   display: flex;
   margin: 0;
 }
@@ -2187,18 +2204,18 @@ body {
   font-size: 10px;
 }
 
-.ann-card-body {
+.ann-sec-body {
   margin-top: 8px;
   max-height: 224px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-.ann-card-body::-webkit-scrollbar {
+.ann-sec-body::-webkit-scrollbar {
   width: 6px;
 }
 
-.ann-card-body::-webkit-scrollbar-thumb {
+.ann-sec-body::-webkit-scrollbar-thumb {
   border-radius: 3px;
   background: #2c2c34;
 }
