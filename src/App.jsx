@@ -79,6 +79,7 @@ import {
   MARKER_SCALE_MIN,
   defaultLayerState,
   flattenStack,
+  isLayerOn,
   layerAlpha,
   layerMarkerScale,
   loadLayerState,
@@ -88,6 +89,7 @@ import {
   overlayPreset,
   patchLayer,
   saveLayerState,
+  toggleLayer,
 } from './layers.js'
 
 /**
@@ -226,8 +228,6 @@ export default function App() {
   const [points, setPoints] = useState(null)
   /** 检测器原始点位：基准点校准的还原基准，重置时回到这里 */
   const [rawPoints, setRawPoints] = useState(null)
-  /** 是否在主图上绘制并可抓取基准点 */
-  const [showAnchors, setShowAnchors] = useState(true)
   const [activeAnchor, setActiveAnchor] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [params, setParams] = useState(DEFAULT_PARAMS)
@@ -274,6 +274,14 @@ export default function App() {
    */
   const [layerState, setLayerState] = useState(loadLayerState)
   useEffect(() => saveLayerState(layerState), [layerState])
+  /**
+   * 基准点显示与否只有一个事实来源：图层栈的 anchors 层。
+   * 此前这里是一个独立的 useState，与图层面板的眼睛互不知道对方存在 ——
+   * 点了左栏「隐藏基准点」，图层面板的眼睛还亮着；在面板里点眼睛也救不回来，
+   * 表现就是「基准点不见了，怎么点都点不回来」。Stage 31 补记收编进图层栈。
+   * （必须声明在 layerState 之后 —— memo/派生值的 TDZ 教训见开发历程 Stage 31。）
+   */
+  const showAnchors = isLayerOn(layerState, 'anchors')
   /** 四个标注板块各自的折叠状态：默认只开「工具」，其余按需展开，不白占画面高度 */
   const [annFold, setAnnFold] = useState({ tools: false, materials: true, layers: true, phrases: true })
   const toggleAnnFold = useCallback((k) => setAnnFold((f) => ({ ...f, [k]: !f[k] })), [])
@@ -1533,7 +1541,7 @@ export default function App() {
               <button
                 className={`btn-ghost sm${showAnchors ? ' active' : ''}`}
                 disabled={!points}
-                onClick={() => setShowAnchors((v) => !v)}
+                onClick={() => setLayerState((st) => toggleLayer(st, 'anchors'))}
               >
                 {showAnchors ? '隐藏基准点' : '显示基准点'}
               </button>
