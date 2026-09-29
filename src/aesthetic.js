@@ -35,6 +35,8 @@
 
 import { frameOf, frameFaceWidth } from './frame.js'
 import { SITES, siteOf } from './zones.js'
+import { getDeformedPoints } from './measure.js'
+import { applySubunitOffsets } from './subunits.js'
 
 // ---------------------------------------------------------------- 尺度
 
@@ -120,6 +122,67 @@ export function levelForMm(points, siteKey, mm, scale) {
   const px = mm / scale.mmPerPixel
   const level = (px / (site.scale * W)) * 100
   return Math.max(-15, Math.min(15, level))
+}
+
+// ---------------------------------------------------------------- 通用档位换算
+
+/**
+ * 两组点位之间的【峰值位移】（mm）—— 形变到底把脸推动了多少。
+ *
+ * 为什么不逐个控件去推导公式：5 路滑块里 chin / cheekbone / forehead 是
+ * 「幅度 × 衰减」，jawline 与 mouth 却是「相对某中心的缩放」，
+ * 各自解析式不同；亚单位还多一层高斯权重。逐个推导既要维护五套公式，
+ * 又容易与实际渲染脱节。**直接量形变前后的点位**最稳：
+ * 画面上看到什么，这里就是什么。
+ *
+ * 代价是要跑一次形变，但 68 点的运算量级在微秒，UI 里每帧都算也无感。
+ *
+ * @returns {?number} mm，恒为非负（峰值是距离，不带方向）；标定不可用时返回 null
+ */
+export function peakDisplacementMm(base, moved, scale) {
+  if (!base || !moved || !scale?.ok) return null
+  const n = Math.min(base.length, moved.length)
+  let max = 0
+  for (let i = 0; i < n; i++) {
+    const dx = moved[i].x - base[i].x
+    const dy = moved[i].y - base[i].y
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d > max) max = d
+  }
+  return max * scale.mmPerPixel
+}
+
+/**
+ * 5 路预设滑块的档位 → 峰值位移（mm）。
+ * 只带这一路去形变，量到的就是这一路单独的贡献，不受其他滑块干扰。
+ */
+export function sliderAmplitudeMm(points, key, value, scale) {
+  if (!points || !Number.isFinite(value) || value === 0 || !scale?.ok) return null
+  return peakDisplacementMm(points, getDeformedPoints(points, { [key]: value }), scale)
+}
+
+/** 亚单位的档位 → 峰值位移（mm），同上，只带这一个亚单位 */
+export function subunitAmplitudeMm(points, key, value, scale) {
+  if (!points || !Number.isFinite(value) || value === 0 || !scale?.ok) return null
+  return peakDisplacementMm(points, applySubunitOffsets(points, { [key]: value }), scale)
+}
+
+/**
+ * 像素 → 毫米。点位手动位移（dx / dy）用的是图像像素，
+ * 那是**随照片变的**：同样 40px，在 4000px 宽的手机直出照和 800px 的
+ * 截图上完全不是一个量级。给出 mm 才能让咨询师心里有数。
+ */
+export function pxToMm(px, scale) {
+  if (!Number.isFinite(px) || !scale?.ok) return null
+  return Math.abs(px) * scale.mmPerPixel
+}
+
+/** 统一的毫米显示格式：1 位小数、去掉无意义的 ±0.0 */
+export function fmtMm(mm, min = 0.05) {
+  if (!Number.isFinite(mm)) return null
+  if (mm < min) return null
+  return `${mm.toFixed(1)}mm`
 }
 
 // ---------------------------------------------------------------- 自动建议

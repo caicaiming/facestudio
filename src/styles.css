@@ -1448,6 +1448,17 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 档位换算出的毫米值：等宽数字，避免位数变化时整行抖动 */
+.su-mm {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .stepper {
   flex: none;
   display: inline-flex;

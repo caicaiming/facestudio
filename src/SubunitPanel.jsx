@@ -21,6 +21,7 @@ import {
   coreIndicesOf,
   subunitsOf,
 } from './subunits.js'
+import { fmtMm, subunitAmplitudeMm } from './aesthetic.js'
 
 /** 长按连续步进：首次延迟 400ms，之后每 90ms 一次 */
 const REPEAT_DELAY = 400
@@ -113,6 +114,9 @@ export default function SubunitPanel({
   onHighlight,
   disabled = false,
   defaultCollapsed = false,
+  // 毫米标定：档位本身没有物理含义，靠它换算成 mm 才知道推了多少
+  points = null,
+  scale = null,
 }) {
   // P0 分区默认展开：杠杆最高、最常用；其余折叠，避免面板过长
   const [open, setOpen] = useState(() => {
@@ -196,27 +200,32 @@ export default function SubunitPanel({
                 {list.length === 0 && (
                   <p className="su-empty">该分区在正面照中无可独立形变的亚单位。</p>
                 )}
-                {list.map((su) => (
-                  <div
-                    key={su.key}
-                    className={`su-row ${values[su.key] ? 'active' : ''}`}
-                    title={su.hint}
-                    onMouseEnter={() => onHighlight?.(coreIndicesOf(su))}
-                    onMouseLeave={() => onHighlight?.(null)}
-                  >
-                    <span className="su-name">{su.label}</span>
-                    <span className="su-hint">{su.hint}</span>
-                    <Stepper
-                      value={values[su.key] ?? 0}
-                      disabled={disabled}
-                      onChange={(updater) => {
-                        const cur = values[su.key] ?? 0
-                        const next = updater(cur)
-                        if (next !== cur) onChange(su.key, next)
-                      }}
-                    />
-                  </div>
-                ))}
+                {list.map((su) => {
+                  const v = values[su.key] ?? 0
+                  const mm = fmtMm(subunitAmplitudeMm(points, su.key, v, scale))
+                  return (
+                    <div
+                      key={su.key}
+                      className={`su-row ${v ? 'active' : ''}`}
+                      title={su.hint}
+                      onMouseEnter={() => onHighlight?.(coreIndicesOf(su))}
+                      onMouseLeave={() => onHighlight?.(null)}
+                    >
+                      <span className="su-name">{su.label}</span>
+                      <span className="su-hint">{su.hint}</span>
+                      {mm && <span className="su-mm">{mm}</span>}
+                      <Stepper
+                        value={v}
+                        disabled={disabled}
+                        onChange={(updater) => {
+                          const cur = values[su.key] ?? 0
+                          const next = updater(cur)
+                          if (next !== cur) onChange(su.key, next)
+                        }}
+                      />
+                    </div>
+                  )
+                })}
                 {list.length > 0 && (
                   <button
                     type="button"

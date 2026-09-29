@@ -30,7 +30,7 @@ import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
 import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
 import { applySiteOffsets, earAnchorOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
-import { buildPlan, mmScale } from './aesthetic.js'
+import { buildPlan, fmtMm, mmScale, pxToMm, sliderAmplitudeMm } from './aesthetic.js'
 import {
   DETECT_MAX_EDGE,
   detectScale,
@@ -1546,6 +1546,11 @@ export default function App() {
                     max={CUSTOM_OFFSET_RANGE}
                     step={0.5}
                     unit="px"
+                    hint={
+                      fmtMm(pxToMm(c[axis], scale))
+                        ? `图像像素 · 约 ${fmtMm(pxToMm(c[axis], scale))}`
+                        : '图像像素，随照片分辨率变化'
+                    }
                     onChange={(v) =>
                       setCustomOffset(
                         selectedCustom,
@@ -1629,6 +1634,12 @@ export default function App() {
                     max={POINT_OFFSET_RANGE}
                     step={0.5}
                     unit="px"
+                    // px 只对这张照片成立；换成 mm 才知道实际推了多远
+                    hint={
+                      fmtMm(pxToMm(o[axis], scale))
+                        ? `图像像素 · 约 ${fmtMm(pxToMm(o[axis], scale))}`
+                        : '图像像素，随照片分辨率变化'
+                    }
                     onChange={(v) => {
                       setOffset(
                         selectedPoint,
@@ -1706,24 +1717,30 @@ export default function App() {
             </p>
           </div>
 
-          {SLIDERS.map((s) => (
-            <ParamSlider
-              key={s.key}
-              label={s.label}
-              value={params[s.key] ?? 0}
-              min={s.min}
-              max={s.max}
-              step={s.step}
-              disabled={!points}
-              hint={s.hint}
-              onChange={(v) => {
-                setParams((p) => ({ ...p, [s.key]: v }))
-                // 调参即视为要调整，自动切到「调整」视图查看照片形变
-                setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
-              }}
-              onReset={() => setParams((p) => ({ ...p, [s.key]: 0 }))}
-            />
-          ))}
+          {SLIDERS.map((s) => {
+            const v = params[s.key] ?? 0
+            // 档位是无量纲的，光看数字不知道推了多少；换算成 mm 才有物理感
+            const mm = fmtMm(sliderAmplitudeMm(points, s.key, v, scale))
+            return (
+              <ParamSlider
+                key={s.key}
+                label={s.label}
+                value={v}
+                min={s.min}
+                max={s.max}
+                step={s.step}
+                unit="档"
+                disabled={!points}
+                hint={mm ? `${s.hint} · 峰值位移约 ${mm}` : s.hint}
+                onChange={(v2) => {
+                  setParams((p) => ({ ...p, [s.key]: v2 }))
+                  // 调参即视为要调整，自动切到「调整」视图查看照片形变
+                  setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+                }}
+                onReset={() => setParams((p) => ({ ...p, [s.key]: 0 }))}
+              />
+            )
+          })}
           <button
             className="btn-ghost"
             disabled={!points}
@@ -1763,6 +1780,8 @@ export default function App() {
           <SubunitPanel
             defaultCollapsed
             values={subunitValues}
+            points={points}
+            scale={scale}
             disabled={!points}
             onChange={(key, v) => {
               setSubunitValues((s) => ({ ...s, [key]: v }))

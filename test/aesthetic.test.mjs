@@ -14,13 +14,20 @@ import { emptySites, siteOf } from '../src/zones.js'
 import {
   IPD_MM,
   buildPlan,
+  fmtMm,
   isInjectable,
   levelForMm,
   mmScale,
+  peakDisplacementMm,
+  pxToMm,
   renderPlanText,
   siteAmplitude,
+  sliderAmplitudeMm,
+  subunitAmplitudeMm,
   suggestFromMetrics,
 } from '../src/aesthetic.js'
+import { getDeformedPoints } from '../src/measure.js'
+import { SUBUNITS, applySubunitOffsets, coreIndicesOf } from '../src/subunits.js'
 
 const ideal = () => generateLandmarks(1)
 const scaled = (k) => generateLandmarks(k)
@@ -272,4 +279,76 @@ test('T11v 面宽毫米与规范面宽一致（跨分辨率）', () => {
   const wa = frameFaceWidth(scaled(1), frameOf(scaled(1)))
   const wb = frameFaceWidth(scaled(3), frameOf(scaled(3)))
   assert.ok(Math.abs(wa * a.mmPerPixel - wb * b.mmPerPixel) < 1e-9)
+})
+
+// ---------------------------------------------------------------- 8. 档位 → 毫米
+
+test('T11w 峰值位移：零位移为 0，标定不可用返回 null', () => {
+  const pts = ideal()
+  const s = mmScale(pts)
+  assert.equal(peakDisplacementMm(pts, pts, s), 0)
+  assert.equal(peakDisplacementMm(pts, pts, { ok: false }), null)
+  assert.equal(peakDisplacementMm(null, pts, s), null)
+  const moved = pts.map((p) => ({ x: p.x + 10, y: p.y }))
+  assert.ok(Math.abs(peakDisplacementMm(pts, moved, s) - 10 * s.mmPerPixel) < 1e-9)
+})
+
+test('T11x 5 路滑块：档位 → mm 跨分辨率一致（这是显示 mm 的全部意义）', () => {
+  const a = mmScale(scaled(1))
+  const b = mmScale(scaled(3))
+  for (const key of ['mouth', 'chin', 'jawline', 'forehead', 'cheekbone']) {
+    const ma = sliderAmplitudeMm(scaled(1), key, 8, a)
+    const mb = sliderAmplitudeMm(scaled(3), key, 8, b)
+    assert.ok(ma > 0, `${key} 应产生位移`)
+    // 同一档位在 1× 与 3× 分辨率下必须是同一个物理长度
+    assert.ok(Math.abs(ma - mb) < 0.05, `${key} 跨分辨率不一致: ${ma} vs ${mb}`)
+  }
+})
+
+test('T11y 5 路滑块：档位为 0 返回 null，档位翻倍 mm 翻倍', () => {
+  const pts = ideal()
+  const s = mmScale(pts)
+  assert.equal(sliderAmplitudeMm(pts, 'chin', 0, s), null)
+  const m1 = sliderAmplitudeMm(pts, 'chin', 4, s)
+  const m2 = sliderAmplitudeMm(pts, 'chin', 8, s)
+  assert.ok(Math.abs(m2 - 2 * m1) < 1e-6, `非线性: ${m1} → ${m2}`)
+})
+
+test('T11z 亚单位：档位 → mm，只带自身一个亚单位', () => {
+  const pts = ideal()
+  const s = mmScale(pts)
+  const su = SUBUNITS[0]
+  assert.equal(subunitAmplitudeMm(pts, su.key, 0, s), null)
+  const m5 = subunitAmplitudeMm(pts, su.key, 5, s)
+  const m10 = subunitAmplitudeMm(pts, su.key, 10, s)
+  assert.ok(m5 > 0 && m10 > 0, '应有位移')
+  assert.ok(Math.abs(m10 - 2 * m5) < 1e-6, `非线性: ${m5} → ${m10}`)
+  // 峰值应落在自身核心点上，而不是被某个远处的点抢走
+  const moved = applySubunitOffsets(pts, { [su.key]: 10 })
+  let best = -1
+  let bestI = -1
+  for (let i = 0; i < 68; i++) {
+    const d = Math.hypot(moved[i].x - pts[i].x, moved[i].y - pts[i].y)
+    if (d > best) {
+      best = d
+      bestI = i
+    }
+  }
+  assert.ok(coreIndicesOf(su).includes(bestI), `峰值落在 ${bestI}，不在核心点内`)
+})
+
+test('T12a px → mm：同一个像素值在大图上代表更小的实际长度', () => {
+  const a = mmScale(scaled(1))
+  const b = mmScale(scaled(3))
+  // 3× 大图上 1px 只对应 1/3 的实际长度 —— 这正是必须显示 mm 的理由
+  assert.ok(Math.abs(pxToMm(30, a) - 3 * pxToMm(30, b)) < 1e-9)
+  assert.equal(pxToMm(-30, a), pxToMm(30, a)) // 峰值不带方向
+  assert.equal(pxToMm(30, { ok: false }), null)
+})
+
+test('T12b 毫米格式化：低于阈值不显示，正常值保留 1 位小数', () => {
+  assert.equal(fmtMm(null), null)
+  assert.equal(fmtMm(0.01), null) // 0.0mm 没有意义，不如不显示
+  assert.equal(fmtMm(2.44), '2.4mm')
+  assert.equal(fmtMm(10), '10.0mm')
 })
