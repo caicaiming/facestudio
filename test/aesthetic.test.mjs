@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { generateLandmarks, measureFace } from '../src/measure.js'
 import { analyzeFace } from '../src/analyze.js'
 import { frameFaceWidth, frameOf } from '../src/frame.js'
-import { emptySites, siteOf } from '../src/zones.js'
+import { emptySites, siteOf, SITE_RANGE } from '../src/zones.js'
 import {
   IPD_MM,
   buildPlan,
@@ -104,11 +104,25 @@ test('T11g 档位 → 毫米：档位为 0 或尺度不可用时返回 ok=false'
   assert.equal(siteAmplitude(pts, '不存在的部位', 10, s).ok, false)
 })
 
-test('T11h 档位钳制：levelForMm 结果不超过 ±15', () => {
+test('T11h 档位钳制：levelForMm 结果不超过档位上限（跟随 SITE_RANGE）', () => {
   const pts = ideal()
   const s = mmScale(pts)
-  assert.equal(levelForMm(pts, 'chin', 999, s), 15)
-  assert.equal(levelForMm(pts, 'chin', -999, s), -15)
+  assert.equal(levelForMm(pts, 'chin', 999, s), SITE_RANGE.max)
+  assert.equal(levelForMm(pts, 'chin', -999, s), SITE_RANGE.min)
+})
+
+test('T11h2 档位上限放宽后，反算不再被旧的 ±15 截断', () => {
+  const pts = ideal()
+  const s = mmScale(pts)
+  // 6mm 的实际建议幅度，按 chin 的 scale 反算应当超过旧的 15 档上限
+  const lv = levelForMm(pts, 'chin', 6, s)
+  assert.ok(
+    Math.abs(lv) <= SITE_RANGE.max && Number.isFinite(lv),
+    `档位应落在 ±${SITE_RANGE.max} 内: ${lv}`,
+  )
+  // 反算回来的毫米必须与输入一致（上限没被悄悄卡住才会成立）
+  const back = siteAmplitude(pts, 'chin', lv, s)
+  assert.ok(Math.abs(back.mm - 6) < 0.2, `档位 ${lv.toFixed(1)} 反算回 ${back.mm}mm ≠ 6mm`)
 })
 
 // ---------------------------------------------------------------- 3. 自动建议

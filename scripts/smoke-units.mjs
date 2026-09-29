@@ -156,7 +156,10 @@ await ensureOpen(zoneBlock)
 const zoneHead = zoneBlock.locator('.su-zone-head').first()
 if ((await zoneHead.getAttribute('aria-expanded')) === 'false') await zoneHead.click()
 await page.waitForTimeout(350)
-await zoneBlock.locator('.su-row').first().locator('button[aria-label="加一档"]').click()
+// 每行有【位移 / 凹凸】两组步进器，按钮名一样 —— 必须指定第 0 列（位移），
+// 否则定位器会撞上两个同名按钮（Stage 31 加凹凸列后这里挂过一次）
+const zoneRow = zoneBlock.locator('.su-row').first()
+await zoneRow.locator('.zone-col').first().locator('button[aria-label="加一档"]').click()
 await page.waitForTimeout(500)
 const zoneMm = await zoneBlock.locator('.zone-mm').first().innerText().catch(() => '')
 check('⑤ 医美部位给出毫米幅度', /\d+(\.\d+)?mm/.test(zoneMm), zoneMm)

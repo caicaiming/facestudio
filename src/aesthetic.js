@@ -34,7 +34,7 @@
  */
 
 import { frameOf, frameFaceWidth } from './frame.js'
-import { SITES, siteOf } from './zones.js'
+import { SITES, SITE_RANGE, siteOf } from './zones.js'
 import { getDeformedPoints } from './measure.js'
 import { applySubunitOffsets } from './subunits.js'
 
@@ -98,7 +98,7 @@ export function mmScale(points, opts = {}) {
 
 /**
  * 把部位档位换算成控制点处的峰值位移（mm）。
- * 档位 ±15 → 位移 = (v/100) × scale × 面宽（像素）→ × mmPerPixel。
+ * 档位（范围见 SITE_RANGE）→ 位移 = (v/100) × scale × 面宽（像素）→ × mmPerPixel。
  *
  * @returns {{mm:number, ok:boolean}} mm 带符号：正 = 填充 / 外扩
  */
@@ -136,7 +136,8 @@ export function levelForMm(points, siteKey, mm, scale) {
   if (!(W > 0)) return 0
   const px = mm / scale.mmPerPixel
   const level = (px / (site.scale * W)) * 100
-  return Math.max(-15, Math.min(15, level))
+  // 上限跟随面板（SITE_RANGE），否则「档位能调到 30、反算却被截在 15」
+  return Math.max(SITE_RANGE.min, Math.min(SITE_RANGE.max, level))
 }
 
 // ---------------------------------------------------------------- 通用档位换算

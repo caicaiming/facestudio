@@ -469,6 +469,21 @@ export const SITES = [
   },
 ]
 
+// ---------------------------------------------------------------- 档位范围
+
+/**
+ * 部位档位范围 —— 位移与凹凸【共用】，全项目只有这一处定义。
+ *
+ * 底层的 `scale` 是按【满档 ±100】标定的（见上方字段说明），UI 卡在 ±15
+ * 只是早期保守取值，不是物理上限。用户反馈「医美数值太小、只有 ±15」，
+ * 于是放宽到 ±30：峰值位移约 2 倍（面宽 150mm 时约 6–9mm），
+ * 仍落在面部填充的合理示意区间内，再往上网格会明显自交。
+ *
+ * 改这一个对象，面板步进器与 mm 换算（aesthetic.js 的 levelForMm）同时生效 ——
+ * 此前 ±15 散落在三个文件里各写一遍，改一处漏两处就会「档位上去了、毫米没变」。
+ */
+export const SITE_RANGE = { min: -30, max: 30, step: 1 }
+
 // ---------------------------------------------------------------- 锚量上下文
 
 const AVG = (a) => a.reduce((x, y) => x + y, 0) / a.length
@@ -620,7 +635,7 @@ export function siteAnchors(points, ctx, frame = null) {
  * 位移量按【规范面宽】归一，跨分辨率、跨姿态一致。
  *
  * @param {Point[]} points  原始 68 点
- * @param {?Object} values  {siteKey: 档位}，−15…＋15；＋ 填充 / − 收紧
+ * @param {?Object} values  {siteKey: 档位}，范围见 SITE_RANGE；＋ 填充 / − 收紧
  * @param {{hairlineY?:number}} opts
  * @returns {Point[]} 新数组，不修改入参
  */
@@ -673,7 +688,7 @@ function applySiteOffsetsBy(points, values, opts = {}, factor = 1) {
     const v = values[site.key]
     if (!Number.isFinite(v) || v === 0) continue
 
-    // 档位 −15…＋15 → 位移占面宽比例（scale 以满档 ±100 定义）
+    // 档位（范围见 SITE_RANGE）→ 位移占面宽比例（scale 以满档 ±100 定义）
     const amp = (v / 100) * site.scale * W * factor
     const r = site.radius * W
     const inv2 = 1 / (r * r)
@@ -737,6 +752,30 @@ function applySiteOffsetsBy(points, values, opts = {}, factor = 1) {
  * @param {{hairlineY?:number, ctx?:Object}} opts
  * @returns {Point[]} 叠加耳部位移后的锚点（新数组）
  */
+/**
+ * 耳区锚点推动的【软膝点】—— 档位上限放宽到 ±30 后必须有的一道闸。
+ *
+ * 耳区和别的部位不同：它在 68 点里一个点都没有，形变只能靠推动外缘锚点
+ * （72 / 75），而锚点是网格边界 —— 推多少，耳后背景就被整块拉多少
+ * （没有耳朵蒙版，见上面「副作用 ①」）。实测：档位从 15 线性放到 30，
+ * 三个耳部位叠加会把锚点推出 **19% 面宽**，耳朵直接飞出画面。
+ *
+ * 所以超过 EAR_KNEE 之后只按 EAR_SLOPE 的比例继续增长：15 档以内行为
+ * 完全不变（老方案不受影响），30 档约为 15 档的 1.2 倍而不是 2 倍 ——
+ * 仍有「还能再外展一点」的手感，但不至于撕开背景。
+ */
+export const EAR_KNEE = 15
+export const EAR_SLOPE = 0.2
+
+/** 耳区档位 → 实际生效的推动档位（软膝点衰减，见上） */
+export function earEffectiveLevel(v) {
+  if (!Number.isFinite(v)) return 0
+  const a = Math.abs(v)
+  if (a <= EAR_KNEE) return v
+  const e = EAR_KNEE + (a - EAR_KNEE) * EAR_SLOPE
+  return v < 0 ? -e : e
+}
+
 export function earAnchorOffsets(points, anchors, values, opts = {}) {
   if (!Array.isArray(anchors) || !values) return anchors
   const earSites = SITES.filter((s) => s.zone === 'ear')
@@ -762,10 +801,11 @@ export function earAnchorOffsets(points, anchors, values, opts = {}) {
     const v = values[site.key]
     if (!Number.isFinite(v) || v === 0) continue
 
-    // 满档（±100）位移量 = anchorScale × 面宽。实测 0.35 档满档约 5% 面宽，
+    // 满档（±100）位移量 = anchorScale × 面宽；15 档时约 5% 面宽，
     // 既能看出耳朵外展，又不至于把边界推得把背景撕开。
+    // 档位经软膝点衰减（earEffectiveLevel）：高档位不再线性放大，见该函数注释。
     const anchorScale = site.anchorScale ?? 0.3
-    const amp = (v / 100) * anchorScale * W
+    const amp = (earEffectiveLevel(v) / 100) * anchorScale * W
 
     for (let a = 0; a < anchors.length; a++) {
       // 只作用于外缘锚点（72 / 75）：顶部与底部锚点离耳朵太远，

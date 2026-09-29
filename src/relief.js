@@ -60,7 +60,7 @@ const clamp1 = (v) => (v > 1 ? 1 : v < -1 ? -1 : v)
  * 位移沿 `dir` 推点位，高度沿 z 推「虚拟深度」，专供光影使用。
  *
  * @param {Array<{site,pts:Point[]}>} anchors  `siteAnchors` 的输出
- * @param {?Object<string,number>} values     {siteKey: 凹凸档位}，−15…＋15；＋ 凸起 / − 凹陷
+ * @param {?Object<string,number>} values     {siteKey: 凹凸档位}，范围见 SITE_RANGE；＋ 凸起 / − 凹陷
  * @param {{w:number,h:number,W:number,k?:number,step?:number}} opts
  *        w/h 画布尺寸，W 面宽（**图像像素**），k 图像→画布缩放
  * @returns {?{gw:number,gh:number,step:number,data:Float32Array,w:number,h:number}}

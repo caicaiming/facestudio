@@ -54,12 +54,18 @@ const ensureOpen = async (label) => {
   await page.waitForTimeout(250)
 }
 
-/** 按部位名找到所在行并点 ＋ N 次 */
+/**
+ * 按部位名找到所在行并点 ＋ N 次。
+ * 每行有【位移 / 凹凸】两组步进器，`.step-btn` 一抓就是 4 个 ——
+ * last() 会点到凹凸列（Stage 31 加的第二组），方案读的是位移档位，
+ * 于是方案列表空、脚本在取 .plan-mm 时超时。这里显式取第 0 列（位移）。
+ */
 const bumpSite = async (label, times) => {
   const row = page.locator('.zone-block .su-row', { hasText: label }).first()
   await row.scrollIntoViewIfNeeded()
+  const plus = row.locator('.zone-col').first().locator('button[aria-label="加一档"]')
   for (let i = 0; i < times; i++) {
-    await row.locator('.step-btn').last().click()
+    await plus.click()
     await page.waitForTimeout(120)
   }
   return row

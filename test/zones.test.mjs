@@ -12,9 +12,11 @@ import { buildFrame, frameFaceWidth, frameOf, project, unproject } from '../src/
 import { buildAnchors } from '../src/anchors.js'
 import {
   SITES,
+  SITE_RANGE,
   SITE_ZONES,
   applySiteOffsets,
   earAnchorOffsets,
+  earEffectiveLevel,
   emptySites,
   siteAnchors,
   siteOf,
@@ -224,6 +226,42 @@ test('T10g 成对部位：控制点左右镜像、方向左右对称', () => {
     assert.ok(Math.abs(dirs[0].y - dirs[1].y) < 1e-9, `${site.key} 方向纵向分量应一致`)
   }
   assert.ok(pairCount >= 10, `成对部位数量不足: ${pairCount}`)
+})
+
+// ------------------------------------------------- 档位范围（放宽到 ±30 后补）
+
+test('T10g2 档位范围：对称、步长 1、且比旧的 ±15 更宽', () => {
+  assert.equal(SITE_RANGE.min, -SITE_RANGE.max, '档位范围应关于 0 对称')
+  assert.equal(SITE_RANGE.step, 1)
+  assert.ok(SITE_RANGE.max > 15, `档位上限应已放宽: ${SITE_RANGE.max}`)
+})
+
+test('T10g3 满档形变：不产生 NaN / Infinity，且位移随档位单调', () => {
+  const pts = ideal()
+  const at = (v) => {
+    const out = applySiteOffsets(pts, { ...emptySites(), chin: v })
+    for (const p of out) {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `档位 ${v} 产生非法坐标`)
+    }
+    let m = 0
+    for (let i = 0; i < 68; i++) m = Math.max(m, Math.hypot(out[i].x - pts[i].x, out[i].y - pts[i].y))
+    return m
+  }
+  const d15 = at(15)
+  const d30 = at(SITE_RANGE.max)
+  assert.ok(d30 > d15 * 1.9 && d30 < d15 * 2.1, `满档位移应约为 15 档的两倍: ${d30} vs ${d15}`)
+})
+
+test('T10g4 档位不再被 ±15 截断：底层 scale 按满档 ±100 标定', () => {
+  // 档位 30 仍在线性区间内（scale 以 ±100 定义），位移必须是 15 档的严格两倍
+  const pts = ideal()
+  const disp = (v) => {
+    const out = applySiteOffsets(pts, { ...emptySites(), malar: v })
+    let m = 0
+    for (let i = 0; i < 68; i++) m = Math.max(m, Math.hypot(out[i].x - pts[i].x, out[i].y - pts[i].y))
+    return m
+  }
+  assert.ok(Math.abs(disp(30) - disp(15) * 2) < 1e-9, '15 → 30 档位移必须严格翻倍')
 })
 
 test('T10h 成对部位形变：左右位移镜像，中轴点不横向移动', () => {
@@ -492,7 +530,8 @@ test('T10y 耳部锚点推动量级：满档位移落在 3%~6% 面宽（可见�
   const W = frameFaceWidth(pts, frame)
 
   for (const s of sitesOf('ear')) {
-    const out = earAnchorOffsets(pts, anchors, { ...emptySites(), [s.key]: 15 })
+    // 满档 = SITE_RANGE.max（30）：软膝点必须把量级仍压在旧 15 档的包络附近
+    const out = earAnchorOffsets(pts, anchors, { ...emptySites(), [s.key]: SITE_RANGE.max })
     const d = Math.hypot(out[4].x - anchors[4].x, out[4].y - anchors[4].y)
     const ratio = d / W
     assert.ok(
@@ -502,15 +541,37 @@ test('T10y 耳部锚点推动量级：满档位移落在 3%~6% 面宽（可见�
   }
 })
 
+test('T10y2 耳区软膝点：15 档以内线性不变，30 档不再线性翻倍', () => {
+  assert.equal(earEffectiveLevel(15), 15, '膝点以内必须原样通过')
+  assert.equal(earEffectiveLevel(8), 8)
+  assert.equal(earEffectiveLevel(-15), -15)
+  const e30 = earEffectiveLevel(SITE_RANGE.max)
+  const e15 = earEffectiveLevel(15)
+  assert.ok(e30 > e15, '高档位仍应继续增长，不能一刀切封顶')
+  assert.ok(e30 < e15 * 1.25, `30 档推动量应被压住: ${e30} vs ${e15}`)
+  assert.equal(earEffectiveLevel(-SITE_RANGE.max), -e30, '负档位应对称')
+
+  const pts = ideal()
+  const anchors = buildAnchors(pts)
+  const d = (v) => {
+    const o = earAnchorOffsets(pts, anchors, { ...emptySites(), earBase: v })
+    return Math.hypot(o[4].x - anchors[4].x, o[4].y - anchors[4].y)
+  }
+  assert.ok(
+    d(SITE_RANGE.max) < d(15) * 1.25,
+    `30 档锚点位移应约为 15 档的 1.2 倍而非 2 倍: ${d(SITE_RANGE.max).toFixed(2)} vs ${d(15).toFixed(2)}`,
+  )
+})
+
 test('T10z 三个耳部部位满档叠加：总位移仍可控（< 12% 面宽）', () => {
   const pts = ideal()
   const anchors = buildAnchors(pts)
   const W = frameFaceWidth(pts, frameOf(pts))
   const out = earAnchorOffsets(pts, anchors, {
     ...emptySites(),
-    earBase: 15,
-    earHelix: 15,
-    earLobe: 15,
+    earBase: SITE_RANGE.max,
+    earHelix: SITE_RANGE.max,
+    earLobe: SITE_RANGE.max,
   })
   for (const a of [4, 7]) {
     const d = Math.hypot(out[a].x - anchors[a].x, out[a].y - anchors[a].y)

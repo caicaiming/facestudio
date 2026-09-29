@@ -235,7 +235,7 @@ export default function App() {
   const [pointOffsets, setPointOffsets] = useState(emptyOffsets)
   // 面部亚单位档位（−15…＋15），按美学分区的局部精细形变，独立于滑块与逐点位移
   const [subunitValues, setSubunitValues] = useState(emptySubunits)
-  // 医美部位档位（−15…＋15）：＋ 填充 / 外扩，− 收紧 / 内收
+  // 医美部位档位（范围见 zones.js 的 SITE_RANGE）：＋ 填充 / 外扩，− 收紧 / 内收
   const [siteValues, setSiteValues] = useState(emptySites)
   /**
    * 医美部位的【凹凸】档位（第三个自由度）。
@@ -1439,6 +1439,8 @@ export default function App() {
         previewPoints,
         pointOffsets,
         subunitValues,
+        // 医美部位档位：冒烟脚本要验证「档位真能调到上限、mm 跟着线性走」
+        siteValues,
         // 凹凸档位：冒烟脚本要验证「调了凹凸确实产生光影」
         siteDepths: deferredSiteDepths,
         // 标注：冒烟脚本要读图层栈验证「画出来的东西确实进了数据」
@@ -1458,6 +1460,7 @@ export default function App() {
     previewPoints,
     pointOffsets,
     subunitValues,
+    siteValues,
     deferredSiteDepths,
     annOn,
     annTool,

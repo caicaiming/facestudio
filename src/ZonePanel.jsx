@@ -13,10 +13,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SITES, SITE_ZONES, sitesOf } from './zones.js'
+import { SITES, SITE_RANGE, SITE_ZONES, sitesOf } from './zones.js'
 import { fmtMm, siteAmplitude, siteDepthMm } from './aesthetic.js'
 
-const RANGE = { min: -15, max: 15, step: 1 }
+/** 档位范围取自 zones.js 的单一定义，面板不再自己写一份（改一处即全生效） */
+const RANGE = SITE_RANGE
 
 /** 长按连续步进：首次延迟 400ms，之后每 90ms 一次 */
 const REPEAT_DELAY = 400
@@ -79,7 +80,7 @@ function Stepper({ value, onChange, disabled }) {
       </button>
       <span
         className={`step-val ${value > 0 ? 'pos' : value < 0 ? 'neg' : ''}`}
-        title="当前档位（−15 … ＋15）"
+        title={`当前档位（−${-RANGE.min} … ＋${RANGE.max}）`}
       >
         {value > 0 ? `+${value}` : value}
       </span>
@@ -193,7 +194,8 @@ export default function ZonePanel({
         <p className="note">
           每行两组档位：<b>位移</b>管轮廓往哪挪（X / Y），<b>凹凸</b>管鼓起来还是瘪下去
           （垂直于照片平面的深度，画面上以高光与阴影呈现）。
-          两组均为 ＋ 填充 / 外扩 / 凸起，− 收紧 / 内收 / 凹陷。
+          两组均为 ＋ 填充 / 外扩 / 凸起，− 收紧 / 内收 / 凹陷，范围各 −{SITE_RANGE.max} …
+          ＋{SITE_RANGE.max}（耳区高档位会自动收敛，避免把背景拉裂）。
           悬停部位名会在主图高亮该部位的作用点。
           {scale?.ok ? '幅度已换算为毫米（瞳距估算）。' : '当前无法换算毫米。'}
         </p>
