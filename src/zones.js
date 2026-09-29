@@ -624,7 +624,29 @@ export function siteAnchors(points, ctx, frame = null) {
  * @param {{hairlineY?:number}} opts
  * @returns {Point[]} 新数组，不修改入参
  */
+/**
+ * 凹凸档位有多少比例「顺手」转成轮廓位移。
+ *
+ * 纯光影不改轮廓，看久了像贴了张图 —— 真实的填充是**既鼓起来、又向外撑一点**。
+ * 但也不能给太多：凹凸的意义本就在于「不改轮廓、只改明暗」，给一半以上
+ * 就和位移档位没区别了。0.25 是实测下来的平衡点：肉眼能看出饱满感，
+ * 又不会让人以为调了位移。
+ */
+export const DEPTH_TO_CONTOUR = 0.25
+
 export function applySiteOffsets(points, values, opts = {}) {
+  return applySiteOffsetsBy(points, values, opts, 1)
+}
+
+/**
+ * 凹凸档位对轮廓的轻微推动（与位移档位叠加，互不覆盖）。
+ * 与 `applySiteOffsets` 共用同一套高斯核，只是幅度 × DEPTH_TO_CONTOUR。
+ */
+export function applySiteDepthOffsets(points, values, opts = {}) {
+  return applySiteOffsetsBy(points, values, opts, DEPTH_TO_CONTOUR)
+}
+
+function applySiteOffsetsBy(points, values, opts = {}, factor = 1) {
   if (!Array.isArray(points) || points.length !== 68) return points
   if (!values) return points
 
@@ -652,7 +674,7 @@ export function applySiteOffsets(points, values, opts = {}) {
     if (!Number.isFinite(v) || v === 0) continue
 
     // 档位 −15…＋15 → 位移占面宽比例（scale 以满档 ±100 定义）
-    const amp = (v / 100) * site.scale * W
+    const amp = (v / 100) * site.scale * W * factor
     const r = site.radius * W
     const inv2 = 1 / (r * r)
 

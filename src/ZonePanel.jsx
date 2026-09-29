@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SITES, SITE_ZONES, sitesOf } from './zones.js'
-import { siteAmplitude } from './aesthetic.js'
+import { fmtMm, siteAmplitude, siteDepthMm } from './aesthetic.js'
 
 const RANGE = { min: -15, max: 15, step: 1 }
 
@@ -107,6 +107,9 @@ export default function ZonePanel({
   points,
   scale,
   onChange,
+  /** 凹凸档位（第三自由度）。不传则该列不出现，保持旧行为 */
+  depths = null,
+  onDepthChange = null,
   onResetZone,
   onResetAll,
   onHighlight,
@@ -140,6 +143,13 @@ export default function ZonePanel({
     if (!v || !points || !scale?.ok) return null
     const a = siteAmplitude(points, site.key, v, scale)
     return a.ok ? a.mm : null
+  }
+
+  /** 凹凸档位 → 毫米（峰值深度；＋ 凸起 / − 凹陷） */
+  const depthMmOf = (site) => {
+    const v = depths?.[site.key] ?? 0
+    if (!v || !points || !scale?.ok) return null
+    return siteDepthMm(points, site.key, v, scale)
   }
 
   return (
@@ -181,7 +191,10 @@ export default function ZonePanel({
 
       <div className="subunit-body" hidden={collapsed}>
         <p className="note">
-          ＋ 为填充 / 外扩，− 为收紧 / 内收。悬停部位名会在主图高亮该部位的作用点。
+          每行两组档位：<b>位移</b>管轮廓往哪挪（X / Y），<b>凹凸</b>管鼓起来还是瘪下去
+          （垂直于照片平面的深度，画面上以高光与阴影呈现）。
+          两组均为 ＋ 填充 / 外扩 / 凸起，− 收紧 / 内收 / 凹陷。
+          悬停部位名会在主图高亮该部位的作用点。
           {scale?.ok ? '幅度已换算为毫米（瞳距估算）。' : '当前无法换算毫米。'}
         </p>
 
@@ -213,11 +226,14 @@ export default function ZonePanel({
                 )}
                 {list.map((site) => {
                   const mm = mmOf(site)
+                  const dmm = depthMmOf(site)
                   const v = values[site.key] ?? 0
+                  const dv = depths?.[site.key] ?? 0
+                  const hasDepth = depths != null && onDepthChange != null
                   return (
                     <div
                       key={site.key}
-                      className={`su-row ${v ? 'active' : ''}`}
+                      className={`su-row zone-row ${v || dv ? 'active' : ''}`}
                       title={`${site.projects.join(' / ')}｜${site.note}`}
                       onMouseEnter={() => onHighlight?.(site.key)}
                       onMouseLeave={() => onHighlight?.(null)}
@@ -243,15 +259,38 @@ export default function ZonePanel({
                           </b>
                         )}
                       </span>
-                      <Stepper
-                        value={v}
-                        disabled={disabled}
-                        onChange={(updater) => {
-                          const cur = v
-                          const next = updater(cur)
-                          if (next !== cur) onChange(site.key, next)
-                        }}
-                      />
+                      {/* 位移：轮廓往哪挪 */}
+                      <span className="zone-col" title="平面位移：轮廓往哪挪（X / Y）">
+                        <em className="zone-col-tag">位移</em>
+                        <Stepper
+                          value={v}
+                          disabled={disabled}
+                          onChange={(updater) => {
+                            const cur = v
+                            const next = updater(cur)
+                            if (next !== cur) onChange(site.key, next)
+                          }}
+                        />
+                      </span>
+                      {/* 凹凸：鼓起来还是瘪下去（第三自由度） */}
+                      {hasDepth && (
+                        <span
+                          className="zone-col"
+                          title="凹凸：垂直于照片平面的深度 —— ＋ 凸起（填充）／ − 凹陷（吸脂）。画面上以高光与阴影呈现"
+                        >
+                          <em className="zone-col-tag">凹凸</em>
+                          <Stepper
+                            value={dv}
+                            disabled={disabled}
+                            onChange={(updater) => {
+                              const cur = dv
+                              const next = updater(cur)
+                              if (next !== cur) onDepthChange(site.key, next)
+                            }}
+                          />
+                          {fmtMm(dmm) && <b className="zone-mm depth">{fmtMm(dmm)}</b>}
+                        </span>
+                      )}
                     </div>
                   )
                 })}

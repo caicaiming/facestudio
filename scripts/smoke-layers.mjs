@@ -5,7 +5,7 @@
  * 三庭五眼、医美部位、基准点这些叠加内容全靠散落的开关控制 —— 不能单独
  * 调浓淡、不能锁、不能排序。现在它们全部进入同一张图层栈。
  *
- * 断言：① 面板列出全部 9 个系统层（画布上每张叠加内容都是图层）
+ * 断言：① 面板列出全部 10 个系统层（画布上每张叠加内容都是图层）
  *      ② 底图照片是图层：可隐藏（img 退出绘制）、可调淡（opacity）
  *      ③ 预设按钮写的是图层状态：点「点位」→ points 开、mesh 关
  *      ④ 标记层可单独隐藏，且不透明度 / 标记大小写进 layerState
@@ -97,7 +97,7 @@ const sysRows = await page.locator('.ann-layer.sys').count()
 const sysKeys = await page.evaluate(() =>
   [...document.querySelectorAll('.ann-layer.sys')].map((el) => el.dataset.key),
 )
-check('① 面板列出 9 个系统层', sysRows === 9, `${sysRows} 行：${sysKeys.join(',')}`)
+check('① 面板列出 10 个系统层', sysRows === 10, `${sysRows} 行：${sysKeys.join(',')}`)
 check(
   '①b 关键叠加内容都在（照片/网格/点位/三庭/对称/部位/自定义/基准点）',
   ['photo', 'warp', 'mesh', 'points', 'three', 'symmetry', 'sites', 'custom', 'anchors'].every((k) =>

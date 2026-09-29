@@ -24,13 +24,23 @@ import {
   calibrateTransform,
   applyTransform,
   frameDiagnostics,
+  frameFaceWidth,
+  frameOf,
 } from './frame.js'
 import { delaunayTriangles } from './delaunay.js'
 import { TRIANGLES } from './triangles.js'
 import { POINT_GROUPS, POINT_NAMES, POINT_OFFSET_RANGE, pointLabel } from './pointMeta.js'
 import { applySubunitOffsets, emptySubunits, subunitsOf } from './subunits.js'
-import { applySiteOffsets, earAnchorOffsets, emptySites, siteAnchors, sitesOf } from './zones.js'
+import {
+  applySiteDepthOffsets,
+  applySiteOffsets,
+  earAnchorOffsets,
+  emptySites,
+  siteAnchors,
+  sitesOf,
+} from './zones.js'
 import { buildPlan, fmtMm, mmScale, pxToMm, sliderAmplitudeMm } from './aesthetic.js'
+import { reliefOf } from './relief.js'
 import {
   DETECT_MAX_EDGE,
   detectScale,
@@ -69,6 +79,7 @@ import {
   MARKER_SCALE_MIN,
   defaultLayerState,
   flattenStack,
+  layerAlpha,
   layerMarkerScale,
   loadLayerState,
   moveContent,
@@ -226,6 +237,12 @@ export default function App() {
   const [subunitValues, setSubunitValues] = useState(emptySubunits)
   // 医美部位档位（−15…＋15）：＋ 填充 / 外扩，− 收紧 / 内收
   const [siteValues, setSiteValues] = useState(emptySites)
+  /**
+   * 医美部位的【凹凸】档位（第三个自由度）。
+   * 与 siteValues（平面位移）分开存：一个是轮廓往哪挪，一个是鼓起来还是瘪下去，
+   * 语义完全不同，混在一个数里就没法分别调、也没法分别讲给顾客听。
+   */
+  const [siteDepths, setSiteDepths] = useState(emptySites)
   // 毫米标定：瞳距参考值取性别均值，用于把档位换算成医美沟通用的 mm
   const [gender, setGender] = useState(null)
   const [ipdMm, setIpdMm] = useState(null)
@@ -539,15 +556,22 @@ export default function App() {
    */
   const deferredOffsets = useDeferredValue(pointOffsets)
   const deferredCustom = useDeferredValue(customPoints)
+  // 凹凸同样降为低优先级：它同时要重算高度场（影响光影层）与指标
+  const deferredSiteDepths = useDeferredValue(siteDepths)
   const previewPoints = useMemo(() => {
     if (!points) return null
-    // 形变四层叠加：5 路预设滑块 → 亚单位局部形变 → 医美部位形变 → 逐点手动位移
+    // 形变五层叠加：5 路预设滑块 → 亚单位局部形变 → 医美部位位移 →
+    //               医美部位凹凸（顺手撑一点轮廓）→ 逐点手动位移
     // 医美部位作用在【虚拟控制点】上（额头/太阳穴/苹果肌等 68 点未覆盖处），
     // 位置由规范坐标系外推，故换任何一张脸都落在同一解剖位置。
     const d = applyPointOffsets(
-      applySiteOffsets(
-        applySubunitOffsets(getDeformedPoints(points, params), subunitValues),
-        siteValues,
+      applySiteDepthOffsets(
+        applySiteOffsets(
+          applySubunitOffsets(getDeformedPoints(points, params), subunitValues),
+          siteValues,
+          { hairlineY: base?.hairlineY },
+        ),
+        deferredSiteDepths,
         { hairlineY: base?.hairlineY },
       ),
       deferredOffsets,
@@ -566,7 +590,17 @@ export default function App() {
       d,
     ).map((p, i) => ({ x: p.x + deferredCustom[i].dx, y: p.y + deferredCustom[i].dy }))
     return d.concat(anchorsD, customD)
-  }, [points, params, subunitValues, siteValues, deferredOffsets, deferredCustom, anchors, base])
+  }, [
+    points,
+    params,
+    subunitValues,
+    siteValues,
+    deferredSiteDepths,
+    deferredOffsets,
+    deferredCustom,
+    anchors,
+    base,
+  ])
 
   /**
    * 主图点集：主图始终显示原图照片，叠加层必须与照片同坐标系，否则点位会浮在
@@ -793,6 +827,22 @@ export default function App() {
     })
 
   /**
+   * 凹凸光影的部位控制点（图像像素坐标）。
+   * 光影是对着【形变后】的脸画的，故用 previewPoints，且跟随点位一起更新。
+   * 在 App 里算一次，主图与导出共用 —— 两处各算一遍还得保证对得上，没必要。
+   * ⚠️ 必须声明在导出函数之前：依赖数组会在渲染时求值，声明靠后就是 TDZ。
+   */
+  const reliefAnchors = useMemo(() => {
+    if (!previewPoints) return null
+    return siteAnchors(previewPoints.slice(0, 68), null, null)
+  }, [previewPoints])
+  /** 面宽（图像像素）：凹凸的半径与高度都按它归一，导出合成也要用 */
+  const faceWidthPx = useMemo(() => {
+    if (!previewPoints) return 0
+    return frameFaceWidth(previewPoints.slice(0, 68), frameOf(previewPoints.slice(0, 68)))
+  }, [previewPoints])
+
+  /**
    * 把标注层画到导出画布上。
    *
    * k0 取「自然宽 ÷ 屏幕布局宽」—— 与画布上的算法完全一致（见
@@ -808,6 +858,36 @@ export default function App() {
         // 隐藏的层不进导出图 —— 屏幕上看不见，导出里冒出来就是惊吓
         drawStack(ctx, layers.filter((it) => it.visible !== false), k0, MAT_IMG_CACHE)
         ctx.restore()
+  }
+
+  /**
+   * 把凹凸光影合成到导出画布。
+   *
+   * 屏幕上靠 CSS `mix-blend-mode: soft-light` 混合，导出是纯 canvas，没有 CSS ——
+   * 这里用 `globalCompositeOperation` 达成同一效果，保证发给顾客的图
+   * 与当面演示的观感一致（不然「屏幕上明明看得出饱满感，图里却平了」）。
+   */
+  const stampRelief = (ctx, warpCanvas, dx, w, h) => {
+    if (!reliefAnchors || !warpCanvas?.width || !faceWidthPx) return
+    const sh = reliefOf(reliefAnchors, siteDepths, {
+      w: warpCanvas.width,
+      h: warpCanvas.height,
+      W: faceWidthPx,
+      // warp 画布是降采样过的，光影网格按它的坐标系算，再一起拉伸
+      k: warpCanvas.width / w,
+    })
+    if (!sh) return
+    const buf = document.createElement('canvas')
+    buf.width = sh.gw
+    buf.height = sh.gh
+    buf.getContext('2d').putImageData(new ImageData(sh.data, sh.gw, sh.gh), 0, 0)
+    ctx.save()
+    ctx.globalCompositeOperation = 'soft-light'
+    ctx.globalAlpha = layerAlpha(layerState, 'relief')
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(buf, dx, 0, w, h)
+    ctx.restore()
   }
 
   const exportComparison = useCallback(async () => {
@@ -832,6 +912,9 @@ export default function App() {
     // warp 画布按 maxEdge 缩放过，drawImage 时统一拉回原图尺寸
     ctx.drawImage(img, 0, 0, w, h)
     ctx.drawImage(warp, w + gap, 0, w, h)
+    // 凹凸光影只盖右侧（术后）：屏幕上看到的光影，导出图里也必须有，
+    // 否则发给顾客的图和当面演示的不是一个东西
+    stampRelief(ctx, warp, w + gap, w, h)
     // 标注同时盖在两侧：它是针对这张照片画的，术前术后都该看得见
     const dispW = img.clientWidth || 0
     stampAnnotations(ctx, w, h, 0, dispW)
@@ -860,7 +943,8 @@ export default function App() {
     a.click()
     a.remove()
     return true
-  }, [])
+    // stampRelief 要读最新的凹凸档位与图层不透明度，故这几项必须在依赖里
+  }, [stampRelief, reliefAnchors, siteDepths, layerState, faceWidthPx])
 
   /** 只导出原始照片 + 标注（不拼对比图）：给顾客发「问题标注图」时用 */
   const exportAnnotated = useCallback(async () => {
@@ -1213,6 +1297,11 @@ export default function App() {
 
   // 部位档位同样降为低优先级更新，与右栏保持一致的响应节奏
   const deferredSiteValues = useDeferredValue(siteValues)
+  /**
+   * 凹凸光影的部位控制点（图像像素坐标）。
+   * 光影是对着【形变后】的脸画的，故用 previewPoints，且跟随点位一起更新。
+   * 在 App 里算一次，主图与导出共用，避免两处各算一遍还对不齐。
+   */
 
   // ---- 医美部位的作用点（供主图叠加层绘制）----
   // 只在有部位被调整或悬停时计算，避免每次渲染都跑一遍外推。
@@ -1342,6 +1431,8 @@ export default function App() {
         previewPoints,
         pointOffsets,
         subunitValues,
+        // 凹凸档位：冒烟脚本要验证「调了凹凸确实产生光影」
+        siteDepths: deferredSiteDepths,
         // 标注：冒烟脚本要读图层栈验证「画出来的东西确实进了数据」
         ann: { on: annOn, tool: annTool, style: annStyle, layers: annLayers, sel: layerSel },
       }
@@ -1359,6 +1450,7 @@ export default function App() {
     previewPoints,
     pointOffsets,
     subunitValues,
+    deferredSiteDepths,
     annOn,
     annTool,
     annStyle,
@@ -1755,6 +1847,7 @@ export default function App() {
           {/* ---------------- 医美部位 ---------------- */}
           <ZonePanel
             values={siteValues}
+            depths={siteDepths}
             points={points}
             scale={scale}
             disabled={!points}
@@ -1763,14 +1856,29 @@ export default function App() {
               // 调部位即视为要调整，自动切到「调整」视图查看照片形变
               setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
             }}
-            onResetZone={(zoneKey) =>
+            onDepthChange={(key, v) => {
+              setSiteDepths((s) => ({ ...s, [key]: v }))
+              // 凹凸只在形变照上才看得到，同样切到「调整」视图
+              setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+            }}
+            onResetZone={(zoneKey) => {
+              // 归零要连凹凸一起归 —— 只清位移、留着凹凸，脸会「鼓着但没挪」
+              const keys = sitesOf(zoneKey).map((s) => s.key)
               setSiteValues((s) => {
                 const next = { ...s }
-                for (const site of sitesOf(zoneKey)) next[site.key] = 0
+                for (const k of keys) next[k] = 0
                 return next
               })
-            }
-            onResetAll={() => setSiteValues(emptySites())}
+              setSiteDepths((s) => {
+                const next = { ...s }
+                for (const k of keys) next[k] = 0
+                return next
+              })
+            }}
+            onResetAll={() => {
+              setSiteValues(emptySites())
+              setSiteDepths(emptySites())
+            }}
             onHighlight={setHighlightSite}
           />
 
@@ -1862,6 +1970,7 @@ export default function App() {
                 srcPoints={srcFull}
                 overlay={overlayKey}
                 layerState={layerState}
+                relief={{ anchors: reliefAnchors, values: deferredSiteDepths }}
                 view={view}
                 metrics={metrics}
                 selectedPoint={selectedPoint}
@@ -1900,6 +2009,7 @@ export default function App() {
                 overlay="none"
                 view="adjustment"
                 showWarp
+                relief={{ anchors: reliefAnchors, values: deferredSiteDepths }}
                 maxEdge={900}
                 triangles={triangles}
                 customCount={0}

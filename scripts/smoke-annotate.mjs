@@ -240,8 +240,8 @@ await page.waitForTimeout(250)
 const rows = await page.locator('.ann-layer').count()
 const freeRows = await page.locator('.ann-layer.free').count()
 check(
-  '⑧a 面板行数 = 9 个系统层 + 内容层数',
-  rows === 9 + (await layers()).length && freeRows === (await layers()).length,
+  '⑧a 面板行数 = 10 个系统层 + 内容层数',
+  rows === 10 + (await layers()).length && freeRows === (await layers()).length,
   `${rows} 行（系统 ${rows - freeRows} + 内容 ${freeRows}）`,
 )
 await page.locator('.ann-layer').first().locator('.ann-eye').click()

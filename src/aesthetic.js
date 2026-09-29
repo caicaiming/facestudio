@@ -112,6 +112,21 @@ export function siteAmplitude(points, siteKey, value, scale, opts = {}) {
   return { mm: px * scale.mmPerPixel, ok: true }
 }
 
+/**
+ * 部位凹凸档位的峰值深度（mm）。
+ * 与 `siteAmplitude` 同一套档位换算，只是方向不在平面内而在 z 上：
+ * ＋ 是凸起的高度，− 是凹陷的深度。二维正面照**测不出真实深度**，
+ * 这是按档位推算的示意量，方案里必须与 mm 幅度一样带估算说明。
+ */
+export function siteDepthMm(points, siteKey, value, scale) {
+  const site = siteOf(siteKey)
+  if (!site || !Number.isFinite(value) || value === 0 || !scale?.ok) return null
+  const frame = frameOf(points)
+  const W = frameFaceWidth(points, frame)
+  if (!(W > 0)) return null
+  return (value / 100) * site.scale * W * scale.mmPerPixel
+}
+
 /** 反向：想要的毫米位移 → 档位（用于自动建议给出档位建议） */
 export function levelForMm(points, siteKey, mm, scale) {
   const site = siteOf(siteKey)

@@ -816,6 +816,19 @@ body {
   border-radius: 8px;
 }
 
+/**
+ * 凹凸光影层。
+ *
+ * soft-light 是这里唯一合适的混合模式：灰度 128 完全不改变底色，
+ * 亮处提亮、暗处压暗，且**保留皮肤纹理与色斑**——multiply 会整体压暗、
+ * screen 会整体提亮、overlay 对比过强容易出死白。
+ * 图层的不透明度（opacity）仍可调，用于收放光影强度。
+ */
+.canvas-wrap .layer.relief {
+  border-radius: 8px;
+  mix-blend-mode: soft-light;
+}
+
 .canvas-empty {
   width: 100%;
   height: 100%;
@@ -1457,6 +1470,35 @@ body {
   color: var(--accent);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 凹凸（深度）的毫米用另一色，与平面位移区分开 */
+.su-mm.depth,
+.zone-mm.depth {
+  background: rgba(168, 85, 247, 0.16);
+  color: #c084fc;
+}
+
+/* 医美部位的「位移 / 凹凸」两列：列头 + 档位器 */
+.zone-row {
+  gap: 4px;
+}
+
+.zone-col {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 5px;
+  border-left: 1px solid var(--line);
+}
+
+.zone-col-tag {
+  flex: none;
+  font-size: 9.5px;
+  font-style: normal;
+  color: var(--text-dim);
+  opacity: 0.75;
 }
 
 .stepper {

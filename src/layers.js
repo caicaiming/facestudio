@@ -44,6 +44,9 @@ export const SYS_LAYERS = [
     hint: '原始照片本身。调淡可以突出标注线稿，隐藏后只剩点位与标注。' },
   { key: 'warp', name: '形变预览', band: 1, icon: '◫', fixed: true, def: false,
     hint: '按当前点位形变后的照片。默认关闭，打开可在原图上直接对照调整效果。' },
+  { key: 'relief', name: '凹凸光影', band: 1, icon: '◐', def: true,
+    hint: '部位凹凸档位渲染出的高光与阴影 —— 凸起迎光变亮、背光变暗，凹陷相反。'
+      + '贴在形变照上，只改明暗不遮纹理；关掉则只看轮廓变化。' },
   { key: 'mesh', name: '三角网格', band: 3, icon: '◺', def: true,
     hint: '68 点连成的三角网格 —— 形变的实际作用域，自带小点位做参照。' },
   { key: 'points', name: '68 点位', band: 3, icon: '⁘', def: false,

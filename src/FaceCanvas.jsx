@@ -30,6 +30,8 @@ import { TRIANGLES } from './triangles.js'
 import { RIGHT_HALF, LEFT_HALF, fitLine, mirrorPoint } from './measure.js'
 import { createWarper } from './warp.js'
 import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
+import { frameFaceWidth, frameOf } from './frame.js'
+import { reliefOf } from './relief.js'
 import { DRAG_GAINS, DEFAULT_DRAG_GAIN_KEY, dampDelta, effectiveGain } from './drag.js'
 import {
   DRAW_TOOLS,
@@ -63,6 +65,19 @@ import {
 
 /** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
 const MAX_EDGE = 1600
+
+/**
+ * 规范面宽（图像像素）：凹凸的半径与高度都按它归一，
+ * 必须与 zones.js 的 applySiteOffsets 用同一把尺子，否则光影位置会与
+ * 轮廓外扩对不上。
+ */
+function faceWidthOf(points, fallback = 1) {
+  if (!points || points.length < 17) return fallback
+  const W = frameFaceWidth(points.slice(0, 68), frameOf(points.slice(0, 68)))
+  if (W > 0) return W
+  const raw = Math.abs(points[16].x - points[0].x)
+  return raw > 0 ? raw : fallback
+}
 
 /** 未传 layerState 时（预览区）使用的常量默认栈 —— 放模块级，引用稳定 */
 const EMPTY_LAYER_STATE = defaultLayerState()
@@ -722,6 +737,12 @@ export default function FaceCanvas({
    * 传了之后，叠加层的可见性 / 不透明度 / 标记缩放 / 层序全部由它决定。
    */
   layerState = null,
+  /**
+   * 凹凸光影层：`{ anchors, values }` —— anchors 是 siteAnchors 的输出，
+   * values 是各部位的凹凸档位。两者都由 App 算好传进来（算一次给主图和导出共用）。
+   * 只有 warp 开着时才画：光影贴在形变后的照片上，warp 关了位置就对不上。
+   */
+  relief = null,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   // 由图层栈接管后，「形变预览」层是个真图层：默认关闭，打开才在原图上叠加
@@ -737,6 +758,10 @@ export default function FaceCanvas({
   const wrapRef = useRef(null)
   const imgRef = useRef(null)
   const warpRef = useRef(null)
+  /** 凹凸光影层：与 warp 同尺寸，靠 CSS mix-blend-mode 叠在形变照上 */
+  const reliefRef = useRef(null)
+  /** 光影的离屏小画布：光影低频，先画小图再放大，省掉 95% 的逐像素计算 */
+  const reliefBufRef = useRef(null)
   const overlayRef = useRef(null)
   const meshRef = useRef(null)
   const warperRef = useRef(null)
@@ -929,6 +954,42 @@ export default function FaceCanvas({
         wctx.clearRect(0, 0, wc.width, wc.height)
       }
 
+      // ---- 凹凸光影层：与 warp 同尺寸，soft-light 叠在形变照上 ----
+      const rc = reliefRef.current
+      if (rc) {
+        const rctx = rc.getContext('2d')
+        rctx.setTransform(1, 0, 0, 1, 0, 0)
+        rctx.clearRect(0, 0, rc.width, rc.height)
+        const showRelief = warpOn && onOf('relief')
+        const sh =
+          showRelief && relief?.anchors && warperRef.current
+            ? reliefOf(relief.anchors, relief.values, {
+                w: warperRef.current.cw,
+                h: warperRef.current.ch,
+                W: faceWidthOf(points, w),
+                // 图像像素 → warp 画布像素（warp 为超大图做过降采样）
+                k: warperRef.current.cw / w,
+              })
+            : null
+        if (sh) {
+          if (rc.width !== warperRef.current.cw || rc.height !== warperRef.current.ch) {
+            rc.width = warperRef.current.cw
+            rc.height = warperRef.current.ch
+            rctx.setTransform(1, 0, 0, 1, 0, 0)
+          }
+          const buf = reliefBufRef.current || (reliefBufRef.current = document.createElement('canvas'))
+          if (buf.width !== sh.gw || buf.height !== sh.gh) {
+            buf.width = sh.gw
+            buf.height = sh.gh
+          }
+          const bctx = buf.getContext('2d')
+          bctx.putImageData(new ImageData(sh.data, sh.gw, sh.gh), 0, 0)
+          rctx.imageSmoothingEnabled = true
+          rctx.imageSmoothingQuality = 'high'
+          rctx.drawImage(buf, 0, 0, sh.gw, sh.gh, 0, 0, rc.width, rc.height)
+        }
+      }
+
       // ---- overlay / mesh 层 ----
       // 清空用画布像素坐标，之后切到「自然坐标 × ov」，绘制代码无需感知缩放。
       const octx = oc.getContext('2d')
@@ -1039,6 +1100,9 @@ export default function FaceCanvas({
     fit,
     // 图层栈：可见性 / 不透明度 / 标记缩放 / 层序任何一项变了都要重画
     layerState,
+    // 凹凸：档位变了要重算高度场，点位变了控制点跟着走 —— 两者都得重画光影
+    relief?.anchors,
+    relief?.values,
   ])
 
   // ---------------------------------------------------------------- 缩放 / 放大镜
@@ -1804,6 +1868,15 @@ export default function FaceCanvas({
               ref={warpRef}
               className="layer warp"
               style={{ display: warpOn ? 'block' : 'none', opacity: alphaOf('warp') }}
+            />
+            {/* 凹凸光影：soft-light 混合，只改明暗不遮皮肤纹理；warp 关了整层退出 */}
+            <canvas
+              ref={reliefRef}
+              className="layer relief"
+              style={{
+                display: warpOn && onOf('relief') ? 'block' : 'none',
+                opacity: alphaOf('relief'),
+              }}
             />
             {/* 素材层在点位【下】：示意图像贴纸一样垫在脸上，点位仍清晰可见 */}
             {ann?.enabled && <canvas ref={matRef} className="layer annot-mats" />}
