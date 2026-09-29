@@ -27,12 +27,19 @@ await page.waitForFunction(() => document.querySelector('.status')?.textContent?
 })
 console.log('✓ 检测完成')
 
-/** 形变图与原图的像素差异 */
+/**
+ * 形变图与原图的像素差异。
+ *
+ * ⚠️ 必须取【预览区】那块 warp 画布（.canvas-duo 里第二个 canvas-wrap）：
+ * 主图的 warp 层只在「形变预览」图层打开时才绘制，平时是 300×150 的空白
+ * 画布，拿它跟原图比永远是 ~98% 差异 —— 之前踩过一次，量错画布得到假阴性。
+ */
 const diffFromOriginal = () =>
   page.evaluate(() => {
-    const wc = document.querySelector('canvas.warp')
-    const img = document.querySelector('.canvas-wrap img')
-    if (!wc || !img) return null
+    const boxes = document.querySelectorAll('.canvas-duo .canvas-wrap')
+    const wc = boxes[1]?.querySelector('canvas.warp')
+    const img = boxes[0]?.querySelector('img')
+    if (!wc || !img || !wc.width) return null
     const c = document.createElement('canvas')
     c.width = wc.width
     c.height = wc.height

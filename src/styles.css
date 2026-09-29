@@ -2307,6 +2307,73 @@ body {
   cursor: not-allowed;
 }
 
+/* ---- 统一图层栈（Stage 29）----
+   系统层与内容层混在同一张列表里，靠「图标 + 更淡的字色 + 无删除按钮」区分：
+   系统层是画布的固定组成部分（照片、网格、点位…），只能隐藏不能删。 */
+.ann-lock {
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.ann-layer.locked .ann-lock {
+  opacity: 1;
+}
+
+.ann-layer.locked .ann-layer-name {
+  /* 锁住 ≠ 隐藏：字不划掉，只加一点斜纹暗示「看得见但动不了」 */
+  opacity: 0.7;
+}
+
+.ann-layer-icon {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  color: var(--text-dim);
+  font-style: normal;
+  text-align: center;
+}
+
+.ann-layer.sys .ann-layer-name {
+  color: var(--text-dim);
+}
+
+.ann-layer.sys.active .ann-layer-name,
+.ann-layer.active .ann-layer-icon {
+  color: var(--text);
+}
+
+.ann-layer-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ann-layers-reset {
+  margin-top: 6px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ann-layers-reset:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 /* ---- 素材库 ---- */
 /* auto-fill 而非固定两列：窄栏两列、浮窗拉宽后自动变三四列，
    免得放大了浮窗还是两列傻大个 */

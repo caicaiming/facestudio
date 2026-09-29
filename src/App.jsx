@@ -64,6 +64,20 @@ import {
 } from './materials.js'
 import { loadCustomPhrases, saveCustomPhrases } from './phrases.js'
 import { fitPanels, loadPanels, savePanels } from './annPanels.js'
+import {
+  MARKER_SCALE_MAX,
+  MARKER_SCALE_MIN,
+  defaultLayerState,
+  flattenStack,
+  layerMarkerScale,
+  loadLayerState,
+  moveContent,
+  moveMarker,
+  overlayOf,
+  overlayPreset,
+  patchLayer,
+  saveLayerState,
+} from './layers.js'
 
 /**
  * 模型权重目录。
@@ -90,6 +104,10 @@ const VIEWS = [
   { key: 'reference', label: '对照' },
 ]
 
+/**
+ * 叠加预设：只是「一次打开一组图层」的快捷方式，不再是独立状态。
+ * 真正的状态在图层栈里（layerState），面板里单独改动后这里就不高亮了。
+ */
 const OVERLAYS = [
   { key: 'mesh', label: '网格' },
   { key: 'points', label: '点位' },
@@ -227,7 +245,18 @@ export default function App() {
   const [annStyle, setAnnStyle] = useState(defaultAnnStyle)
   /** 图层栈：数组序即 z 序，末尾 = 最上层。坐标一律为图片自然像素 */
   const [annLayers, setAnnLayers] = useState([])
-  const [annSel, setAnnSel] = useState(null)
+  /**
+   * 图层面板里当前选中的行：内容层是它的 id，系统层是 'sys:<key>'。
+   * 用同一个 state 是因为「选中的是哪一个图层」本来就只有一个答案 ——
+   * 分成两个状态会让「点了系统层，画线还在选中」这种鬼影状态出现。
+   */
+  const [layerSel, setLayerSel] = useState(null)
+  /**
+   * 统一图层栈（见 layers.js）：系统层的可见性 / 锁定 / 不透明度 / 标记大小 / 层序。
+   * 跨会话记忆 —— 咨询师每次打开都在讲同一类方案，没必要重设一遍。
+   */
+  const [layerState, setLayerState] = useState(loadLayerState)
+  useEffect(() => saveLayerState(layerState), [layerState])
   /** 四个标注板块各自的折叠状态：默认只开「工具」，其余按需展开，不白占画面高度 */
   const [annFold, setAnnFold] = useState({ tools: false, materials: true, layers: true, phrases: true })
   const toggleAnnFold = useCallback((k) => setAnnFold((f) => ({ ...f, [k]: !f[k] })), [])
@@ -260,7 +289,11 @@ export default function App() {
   const [base, setBase] = useState(null)
   // 调整记录快照
   const [history, setHistory] = useState([])
-  const [overlay, setOverlay] = useState('mesh')
+  /**
+   * 叠加预设（工具栏那排 seg）由图层栈反推 —— 不再单独存一份状态，
+   * 否则「面板里改了、按钮还亮着」这种两套真相的 bug 迟早出现。
+   */
+  const overlayKey = overlayOf(layerState)
   const [error, setError] = useState(null)
   const [backend, setBackend] = useState(null)
   const faceapiRef = useRef(null)
@@ -392,12 +425,14 @@ export default function App() {
         setHistory([])
         // 标注钉在原图的自然像素上，换图即失效，一并清空（含撤销栈）
         setAnnLayers([])
-        setAnnSel(null)
+        setLayerSel(null)
         setAnnPast([])
         setAnnFuture([])
         resetAutoTune()
         setView('detection')
-        setOverlay('mesh')
+        // 换图不清用户的图层设置，只兜底一种情况：四个叠加层全关着时
+        // 新照片上什么都没有，看着像坏了 —— 那就替他开回网格。
+        setLayerState((st) => (overlayOf(st) === 'none' ? overlayPreset(st, 'mesh') : st))
         setPhase('done')
       } catch {
         setImageSrc(url)
@@ -765,13 +800,14 @@ export default function App() {
    * 标注坐标本来就是自然像素，左右两幅直接复用同一份栈。
    */
   const stampAnnotations = (ctx, w, h, dx, dispW) => {
-    const layers = annLayersRef.current
-    if (!layers.length) return
-    const k0 = dispW > 0 ? w / dispW : 1
-    ctx.save()
-    ctx.translate(dx, 0)
-    drawStack(ctx, layers, k0, MAT_IMG_CACHE)
-    ctx.restore()
+        const layers = annLayersRef.current
+        if (!layers.length) return
+        const k0 = dispW > 0 ? w / dispW : 1
+        ctx.save()
+        ctx.translate(dx, 0)
+        // 隐藏的层不进导出图 —— 屏幕上看不见，导出里冒出来就是惊吓
+        drawStack(ctx, layers.filter((it) => it.visible !== false), k0, MAT_IMG_CACHE)
+        ctx.restore()
   }
 
   const exportComparison = useCallback(async () => {
@@ -871,7 +907,7 @@ export default function App() {
   const annAdd = useCallback(
     (item) => {
       commitAnn((cur) => [...cur, item])
-      setAnnSel(item.id)
+      setLayerSel(item.id)
     },
     [commitAnn],
   )
@@ -884,27 +920,8 @@ export default function App() {
   const annErase = useCallback(
     (i) => {
       commitAnn((cur) => cur.filter((_, k) => k !== i))
-      setAnnSel(null)
+      setLayerSel(null)
     },
-    [commitAnn],
-  )
-
-  const annToggleVisible = useCallback(
-    (i) => commitAnn((cur) => cur.map((x, k) => (k === i ? { ...x, visible: x.visible === false } : x))),
-    [commitAnn],
-  )
-
-  const annReorder = useCallback(
-    (i, dir) =>
-      commitAnn((cur) => {
-        const j = i + dir
-        if (j < 0 || j >= cur.length) return cur
-        const next = cur.slice()
-        const t = next[i]
-        next[i] = next[j]
-        next[j] = t
-        return next
-      }),
     [commitAnn],
   )
 
@@ -916,36 +933,109 @@ export default function App() {
   const scaleSel = useCallback(
     (f) => {
       const layers = annLayersRef.current
-      const i = layers.findIndex((x) => x.id === annSel)
+      const i = layers.findIndex((x) => x.id === layerSel)
       if (i < 0) return
       const it = layers[i]
+      // 锁住的层不允许变形（可见性与浓淡仍可调 —— 那两样不算「动它」）
+      if (it.lock) return
       const box = layerBox(it)
       if (box) annUpdate(i, scaleLayer(it, f, f, { x: box.cx, y: box.cy }, box.rot))
     },
-    [annSel, annUpdate],
+    [layerSel, annUpdate],
   )
 
   /** 旋转当前选中层（素材/框/文字存 rot，线段与画笔把角度烤进坐标） */
   const rotateSel = useCallback(
     (deg) => {
       const layers = annLayersRef.current
-      const i = layers.findIndex((x) => x.id === annSel)
+      const i = layers.findIndex((x) => x.id === layerSel)
       if (i < 0) return
+      if (layers[i].lock) return
       annUpdate(i, rotateLayer(layers[i], deg))
     },
-    [annSel, annUpdate],
+    [layerSel, annUpdate],
   )
 
-  /** 选中层的不透明度（素材贴脸挡视线时调淡，比挪开省事） */
-  const alphaSel = useCallback(
-    (a) => {
-      const layers = annLayersRef.current
-      const i = layers.findIndex((x) => x.id === annSel)
-      if (i < 0) return
-      annUpdate(i, { ...layers[i], alpha: Math.max(0.15, Math.min(1, a)) })
+  // ---------------------------------------------------------------- 统一图层栈
+
+  /** 面板要展示的栈：系统层与内容层摊平后的单一列表（自下而上） */
+  const layerStack = useMemo(() => flattenStack(layerState, annLayers), [layerState, annLayers])
+
+  /** 内容层的补丁：走撤销栈，与画线同一个「改一次记一步」的粒度 */
+  const patchContent = useCallback(
+    (row, patch) => {
+      const cur = annLayersRef.current[row.index]
+      if (!cur) return
+      annUpdate(row.index, { ...cur, ...patch })
     },
-    [annSel, annUpdate],
+    [annUpdate],
   )
+
+  const layerToggleVisible = useCallback(
+    (row) => {
+      if (row.sys) setLayerState((st) => patchLayer(st, row.key, { visible: row.visible === false }))
+      else patchContent(row, { visible: row.visible === false })
+    },
+    [patchContent],
+  )
+
+  const layerToggleLock = useCallback(
+    (row) => {
+      if (row.sys) setLayerState((st) => patchLayer(st, row.key, { lock: !row.lock }))
+      else patchContent(row, { lock: !row.lock })
+    },
+    [patchContent],
+  )
+
+  const layerMove = useCallback(
+    (row, dir) => {
+      if (row.sys) setLayerState((st) => moveMarker(st, row.key, dir))
+      else commitAnn((cur) => moveContent(cur, row.index, dir))
+    },
+    [commitAnn],
+  )
+
+  const layerRemove = useCallback(
+    (row) => {
+      if (row.sys) return // 系统层删不得：它是画布的固定组成部分，只能隐藏
+      setLayerSel(null)
+      annErase(row.index)
+    },
+    [annErase],
+  )
+
+  const layerRename = useCallback(
+    (row, name) => {
+      if (row.sys) setLayerState((st) => patchLayer(st, row.key, { name }))
+      else patchContent(row, { name })
+    },
+    [patchContent],
+  )
+
+  /** 不透明度：素材贴脸挡视线时调淡比挪开省事，标记层同理 */
+  const layerAlpha = useCallback(
+    (row, a) => {
+      const v = Math.min(1, Math.max(0.15, a))
+      if (row.sys) setLayerState((st) => patchLayer(st, row.key, { alpha: v }))
+      else patchContent(row, { alpha: v })
+    },
+    [patchContent],
+  )
+
+  /** 标记大小：只放大「画出来的标记」，不动点位数据本身 */
+  const layerMarker = useCallback((row, dir) => {
+    if (!row.sys) return
+    setLayerState((st) => {
+      const cur = layerMarkerScale(st, row.key)
+      const next = Math.min(MARKER_SCALE_MAX, Math.max(MARKER_SCALE_MIN, cur + dir * 0.25))
+      return patchLayer(st, row.key, { marker: next })
+    })
+  }, [])
+
+  const layerReset = useCallback(() => {
+    setLayerState(defaultLayerState())
+    setLayerSel(null)
+  }, [])
 
   const undoAnn = () => {
     if (annPast.length === 0) return
@@ -965,7 +1055,7 @@ export default function App() {
 
   const clearAnn = () => {
     commitAnn([])
-    setAnnSel(null)
+    setLayerSel(null)
   }
 
   /** 素材贴到画面中央：高度取画布短边的 60%（与融合工具的出厂值一致） */
@@ -1043,9 +1133,11 @@ export default function App() {
         return
       }
       const layers = annLayersRef.current
-      const i = layers.findIndex((x) => x.id === annSel)
+      const i = layers.findIndex((x) => x.id === layerSel)
       if (i < 0) return
       const it = layers[i]
+      // 锁住的层：删除与位移都不生效（缩放旋转由 scaleSel / rotateSel 自己挡）
+      if (it.lock) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         annErase(i)
@@ -1073,7 +1165,7 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annOn, annSel, annPast, annFuture, annLayers, base, scaleSel, rotateSel])
+  }, [annOn, layerSel, annPast, annFuture, annLayers, base, scaleSel, rotateSel])
 
   /** 传给画布的标注状态（预览区不带标注：一份栈只服务一张照片） */
   const ann = useMemo(
@@ -1082,9 +1174,9 @@ export default function App() {
       tool: annTool,
       style: annStyle,
       layers: annLayers,
-      sel: annSel,
+      sel: layerSel,
     }),
-    [annOn, points, annTool, annStyle, annLayers, annSel],
+    [annOn, points, annTool, annStyle, annLayers, layerSel],
   )
 
   const clearCustomPoints = useCallback(() => {
@@ -1242,7 +1334,8 @@ export default function App() {
         metrics,
         params,
         view,
-        overlay,
+        overlay: overlayKey,
+        layerState,
         customPoints,
         triangles,
         displayPoints,
@@ -1250,7 +1343,7 @@ export default function App() {
         pointOffsets,
         subunitValues,
         // 标注：冒烟脚本要读图层栈验证「画出来的东西确实进了数据」
-        ann: { on: annOn, tool: annTool, style: annStyle, layers: annLayers, sel: annSel },
+        ann: { on: annOn, tool: annTool, style: annStyle, layers: annLayers, sel: layerSel },
       }
     }
   }, [
@@ -1258,7 +1351,8 @@ export default function App() {
     metrics,
     params,
     view,
-    overlay,
+    overlayKey,
+    layerState,
     customPoints,
     triangles,
     displayPoints,
@@ -1269,7 +1363,7 @@ export default function App() {
     annTool,
     annStyle,
     annLayers,
-    annSel,
+    layerSel,
   ])
 
   return (
@@ -1701,13 +1795,14 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {/* 叠加预设：一次性开一组图层。真正的开关在右栏「图层」面板里 */}
             <div className="seg">
               {OVERLAYS.map((o) => (
                 <button
                   key={o.key}
-                  className={overlay === o.key ? 'active' : ''}
+                  className={overlayKey === o.key ? 'active' : ''}
                   disabled={!points}
-                  onClick={() => setOverlay(o.key)}
+                  onClick={() => setLayerState((st) => overlayPreset(st, o.key))}
                 >
                   {o.label}
                 </button>
@@ -1746,7 +1841,8 @@ export default function App() {
                 imageSrc={imageSrc}
                 points={displayPoints}
                 srcPoints={srcFull}
-                overlay={overlay}
+                overlay={overlayKey}
+                layerState={layerState}
                 view={view}
                 metrics={metrics}
                 selectedPoint={selectedPoint}
@@ -1770,7 +1866,7 @@ export default function App() {
                 onAnnAdd={annAdd}
                 onAnnUpdate={annUpdate}
                 onAnnErase={annErase}
-                onAnnSelect={setAnnSel}
+                onAnnSelect={setLayerSel}
               />
 
             </div>
@@ -1871,15 +1967,19 @@ export default function App() {
                 onFloat={() => togglePanelFloat('layers')}
               >
                 <LayerPanel
-                  layers={annLayers}
-                  sel={annSel}
-                  onSelect={setAnnSel}
-                  onToggleVisible={annToggleVisible}
-                  onRemove={annErase}
-                  onReorder={annReorder}
+                  stack={layerStack}
+                  sel={layerSel}
+                  onSelect={setLayerSel}
+                  onToggleVisible={layerToggleVisible}
+                  onToggleLock={layerToggleLock}
+                  onMove={layerMove}
+                  onRemove={layerRemove}
+                  onRename={layerRename}
+                  onAlpha={layerAlpha}
+                  onMarker={layerMarker}
                   onScale={scaleSel}
                   onRotate={rotateSel}
-                  onAlpha={alphaSel}
+                  onReset={layerReset}
                 />
               </AnnSection>
 

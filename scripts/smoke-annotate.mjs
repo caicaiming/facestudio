@@ -236,8 +236,14 @@ check(
 console.log('== 图层面板 ==')
 await page.locator('.ann-fold', { hasText: '图层' }).click()
 await page.waitForTimeout(250)
+// Stage 29 起面板同时列出系统层（照片/网格/点位…）与内容层，行数不再等于内容层数
 const rows = await page.locator('.ann-layer').count()
-check('⑧a 图层行数等于层数', rows === (await layers()).length, `${rows} 行`)
+const freeRows = await page.locator('.ann-layer.free').count()
+check(
+  '⑧a 面板行数 = 9 个系统层 + 内容层数',
+  rows === 9 + (await layers()).length && freeRows === (await layers()).length,
+  `${rows} 行（系统 ${rows - freeRows} + 内容 ${freeRows}）`,
+)
 await page.locator('.ann-layer').first().locator('.ann-eye').click()
 await page.waitForTimeout(200)
 check('⑧b 眼睛切换可见性', (await layers()).some((l) => l.visible === false))
@@ -247,9 +253,11 @@ const orderBefore = (await layers()).map((l) => l.id)
 await page.locator('.ann-layer').first().locator('button[title="下移一层"]').click()
 await page.waitForTimeout(200)
 const orderAfter = (await layers()).map((l) => l.id)
+// 排序现在只在层组内进行（素材垫在点位下、画线压在点位上不能穿越），
+// 所以「第一行下移」改动的是画线组内部的顺序，不一定动到数组末尾那个素材
 check(
-  '⑧c 下移一层改变 z 序',
-  orderBefore[orderBefore.length - 1] !== orderAfter[orderAfter.length - 1],
+  '⑧c 下移一层改变 z 序（内容层在自己层组内换位）',
+  orderBefore.join(',') !== orderAfter.join(','),
   `${orderBefore.join(',')} → ${orderAfter.join(',')}`,
 )
 

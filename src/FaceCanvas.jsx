@@ -18,6 +18,11 @@
  * 同一组件承担两种角色（由 showWarp / overlay 决定）：
  *   - 主图：showWarp=false，始终显示原图，叠加层按 overlay 绘制
  *   - 预览：showWarp=true，显示形变后的照片，overlay='none' 时不画任何线条
+ *
+ * 叠加内容现在统一由【图层栈】控制（layerState，见 layers.js）：
+ * 主图传入 layerState 后，网格 / 点位 / 三庭五眼 / 对称 / 医美部位 / 自定义点 /
+ * 基准点各自按自己的可见性、不透明度、标记缩放与层序绘制；预览区不传，
+ * 沿用「只显示形变照」的旧行为。
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -36,7 +41,7 @@ import {
   drawLayer,
   drawLayers,
   hitHandle,
-  hitLayers,
+  hitLayer,
   layerBox,
   makeText,
   splitStack,
@@ -47,9 +52,20 @@ import {
   updateStroke,
 } from './annotations.js'
 import { MAT_IMG_CACHE, ensureMaterial } from './materials.js'
+import {
+  defaultLayerState,
+  isLayerOn,
+  layerAlpha,
+  layerLock,
+  layerMarkerScale,
+  markerOrderOf,
+} from './layers.js'
 
 /** warp 画布长边上限默认值：超大图（手机直出 4000px+）按此降采样，保证拖动实时性 */
 const MAX_EDGE = 1600
+
+/** 未传 layerState 时（预览区）使用的常量默认栈 —— 放模块级，引用稳定 */
+const EMPTY_LAYER_STATE = defaultLayerState()
 
 /**
  * overlay / mesh 画布的像素面积上限。
@@ -701,11 +717,23 @@ export default function FaceCanvas({
   onAnnUpdate,
   onAnnErase,
   onAnnSelect,
+  /**
+   * 统一图层栈状态（见 layers.js）。只有主图传 —— 预览区不传，沿用旧行为。
+   * 传了之后，叠加层的可见性 / 不透明度 / 标记缩放 / 层序全部由它决定。
+   */
+  layerState = null,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
-  const warpOn = showWarp ?? view === 'adjustment'
+  // 由图层栈接管后，「形变预览」层是个真图层：默认关闭，打开才在原图上叠加
+  const warpOn = layerState ? isLayerOn(layerState, 'warp') : showWarp ?? view === 'adjustment'
   // 'none' 表示纯净照片（预览区），不绘制任何叠加层
   const drawOverlay = overlay !== 'none' && view !== 'reference'
+  /** 图层栈：没传就用默认（等价于旧行为的「只画网格」） */
+  const LS = layerState || EMPTY_LAYER_STATE
+  const onOf = (key) => isLayerOn(LS, key)
+  const alphaOf = (key) => layerAlpha(LS, key)
+  const lockOf = (key) => layerLock(LS, key)
+  const markerOf = (key) => layerMarkerScale(LS, key)
   const wrapRef = useRef(null)
   const imgRef = useRef(null)
   const warpRef = useRef(null)
@@ -923,19 +951,37 @@ export default function FaceCanvas({
       const k = dispW > 0 ? w / dispW : 1
 
       const tm = performance.now()
-      if (overlay === 'mesh') drawMesh(mctx, points, lw, triangles, k)
-      else if (overlay === 'points') drawPoints(mctx, points, lw, k)
-      else if (overlay === 'three') {
-        drawThree(octx, points, metrics, lw)
-        drawFaintPoints(mctx, points, k)
-      } else if (overlay === 'symmetry') {
-        drawSymmetry(octx, points, lw)
-        drawFaintPoints(mctx, points, k)
+      /**
+       * 标记层：按图层栈的顺序逐层绘制。
+       * 每层带自己的可见性 / 不透明度 / 标记缩放 —— 这些都是图层面板里的操作，
+       * 画布只是照做。锁定的层照样画（锁只挡拾取，不挡显示）。
+       */
+      for (const key of markerOrderOf(LS)) {
+        if (!onOf(key)) continue
+        const ms = markerOf(key)
+        const lw2 = lw * ms
+        const k2 = k * ms
+        mctx.save()
+        mctx.globalAlpha = alphaOf(key)
+        if (key === 'mesh') drawMesh(mctx, points, lw2, triangles, k2)
+        else if (key === 'points') drawPoints(mctx, points, lw2, k2)
+        else if (key === 'three') {
+          drawThree(mctx, points, metrics, lw2)
+          drawFaintPoints(mctx, points, k2)
+        } else if (key === 'symmetry') {
+          drawSymmetry(mctx, points, lw2)
+          drawFaintPoints(mctx, points, k2)
+        } else if (key === 'custom') {
+          drawCustomPoints(mctx, points, customCount, selectedPoint, lw2, k2)
+        } else if (key === 'sites') {
+          drawSiteMarkers(mctx, siteMarkers, lw2, k2)
+        } else if (key === 'anchors' && showAnchors && frameAnchors) {
+          drawFrameAnchors(mctx, frameAnchors, lw2, k2, activeAnchor)
+        }
+        mctx.restore()
       }
-      drawCustomPoints(mctx, points, customCount, selectedPoint, lw, k)
-      drawSiteMarkers(mctx, siteMarkers, lw, k)
+      // 亚单位高亮 / hover / 选中是交互反馈，不是图层，永远画在最上面
       drawHighlight(mctx, points, highlight, lw, k)
-      if (showAnchors && frameAnchors) drawFrameAnchors(mctx, frameAnchors, lw, k, activeAnchor)
       const hov = hoverRef.current
       if (hov >= 0 && hov !== selectedPoint && hov < points.length) {
         drawHover(mctx, points, hov, lw, k)
@@ -991,6 +1037,8 @@ export default function FaceCanvas({
     zoom,
     // 容器可用空间变化 → 显示尺寸变 → k 变，同上
     fit,
+    // 图层栈：可见性 / 不透明度 / 标记缩放 / 层序任何一项变了都要重画
+    layerState,
   ])
 
   // ---------------------------------------------------------------- 缩放 / 放大镜
@@ -1237,7 +1285,7 @@ export default function FaceCanvas({
     drawLayers(actx, marked, k0, MAT_IMG_CACHE, null)
     // 变换手柄画在最上层：选中素材时手柄也要看得见，否则没法调大小
     const sel = layers.find((it) => it.id === ann.sel)
-    if (sel && sel.visible !== false && ann.tool !== 'era') {
+    if (sel && sel.visible !== false && !sel.lock && ann.tool !== 'era') {
       const px = annPx()
       drawGizmo(actx, sel, 5 * px, 26 * px)
     }
@@ -1287,6 +1335,21 @@ export default function FaceCanvas({
    * 选中层的手柄命中。橡皮工具下不参与（那会儿也不画手柄）。
    * 返回 { id, index, item } 或 null。
    */
+  /**
+   * 命中一个「可被拾取」的标注层：隐藏的与【锁定的】都跳过。
+   * 用 hitLayer 自顶向下逐个试，而不是 hitLayers —— 后者只返回下标，
+   * 无法表达「这一层锁了，往下找下一层」。
+   */
+  const annPickable = (p, tol) => {
+    const layers = ann?.layers || []
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const it = layers[i]
+      if (it.visible === false || it.lock) continue
+      if (hitLayer(p, it, tol)) return i
+    }
+    return -1
+  }
+
   const annHandleAt = (p) => {
     const A = ann
     if (!A?.enabled || !A.sel || A.tool === 'era') return null
@@ -1294,7 +1357,8 @@ export default function FaceCanvas({
     const i = layers.findIndex((it) => it.id === A.sel)
     if (i < 0) return null
     const it = layers[i]
-    if (it.visible === false) return null
+    // 隐藏或锁定的层不出手柄：锁住就是不让动，给手柄等于骗人
+    if (it.visible === false || it.lock) return null
     const id = hitHandle(p, it, annTol())
     return id ? { id, index: i, item: it } : null
   }
@@ -1334,12 +1398,12 @@ export default function FaceCanvas({
     }
 
     if (A.tool === 'era') {
-      const i = hitLayers(p, layers, tol)
+      const i = annPickable(p, tol)
       if (i >= 0) onAnnErase?.(i)
       return
     }
     if (A.tool === 'move') {
-      const i = hitLayers(p, layers, tol)
+      const i = annPickable(p, tol)
       if (i >= 0) {
         e.preventDefault()
         annDragRef.current = { kind: 'move', index: i, ox: p.x, oy: p.y, base: layers[i] }
@@ -1452,8 +1516,16 @@ export default function FaceCanvas({
     return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h }
   }
 
-  /** 可交互点位：68 关键点 + 自定义点（锚点是辅助点，不参与交互） */
-  const isDraggable = (i) => i < 68 || (i >= CUSTOM_BASE && i < CUSTOM_BASE + customCount)
+  /**
+   * 可交互点位：68 关键点 + 自定义点（锚点是辅助点，不参与交互）。
+   * 图层被锁定时一律不可交互 —— 锁的意义就是「别碰这一层」，
+   * 否则锁了点位还能拖，锁就成了摆设。
+   */
+  const isDraggable = (i) => {
+    if (i < 68) return !lockOf('points')
+    if (i >= CUSTOM_BASE && i < CUSTOM_BASE + customCount) return !lockOf('custom')
+    return false
+  }
 
   /**
    * 命中测试：返回最近可交互点位索引，超出半径返回 -1。
@@ -1470,7 +1542,7 @@ export default function FaceCanvas({
     const hitR = Math.max(w * 0.02, MARKER_PX.hit * k)
 
     // 基准点优先：它是整张脸的坐标原点，比单个关键点更该被抓到
-    if (showAnchors && frameAnchors) {
+    if (showAnchors && frameAnchors && !lockOf('anchors')) {
       let bestA = null
       let bestAD = Infinity
       for (const key of ['L', 'R']) {
@@ -1652,7 +1724,7 @@ export default function FaceCanvas({
         e.currentTarget.style.cursor = 'grab'
         return
       }
-      const over = hitLayers(p, ann.layers || [], annTol()) >= 0
+      const over = annPickable(p, annTol()) >= 0
       const cur =
         ann.tool === 'move' ? (over ? 'grab' : 'default')
         : ann.tool === 'era' ? (over ? 'not-allowed' : 'default')
@@ -1715,19 +1787,23 @@ export default function FaceCanvas({
       <div className="canvas-zoom" ref={zoomLayerRef}>
         {imageSrc ? (
           <>
-            {/* visibility 而非 opacity：隐藏时不参与绘制，但仍占位保持布局 */}
+            {/* 底图照片也是一个图层：可隐藏（只剩点位与标注）、可调淡。
+                visibility 而非 display —— 隐藏后仍占位，命中测试的 rect 才不会塌成 0。 */}
             <img
               ref={imgRef}
               src={imageSrc}
               alt="待分析的人脸照片"
               draggable={false}
-              style={{ visibility: warpOn ? 'hidden' : 'visible' }}
+              style={{
+                visibility: warpOn || !onOf('photo') ? 'hidden' : 'visible',
+                opacity: alphaOf('photo'),
+              }}
             />
             {/* display:none 而非 opacity:0：非调整视图让整层退出合成，减少每帧开销 */}
             <canvas
               ref={warpRef}
               className="layer warp"
-              style={{ display: warpOn ? 'block' : 'none' }}
+              style={{ display: warpOn ? 'block' : 'none', opacity: alphaOf('warp') }}
             />
             {/* 素材层在点位【下】：示意图像贴纸一样垫在脸上，点位仍清晰可见 */}
             {ann?.enabled && <canvas ref={matRef} className="layer annot-mats" />}
