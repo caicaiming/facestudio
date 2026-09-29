@@ -829,6 +829,18 @@ body {
   mix-blend-mode: soft-light;
 }
 
+/**
+ * 差异热区层。
+ *
+ * 刻意**不用** soft-light：热区是要被看见的标记，不是要融入照片的光影。
+ * 用 normal 叠加半透明暖色，客户一眼能找出「改过的地方」在哪；
+ * 若像 relief 那样混合进底色，本身就微弱的形变标记会彻底看不见，
+ * 那这一层就没有存在意义了。没动过的区域 alpha=0，照片观感不受影响。
+ */
+.canvas-wrap .layer.diff {
+  border-radius: 8px;
+}
+
 .canvas-empty {
   width: 100%;
   height: 100%;

@@ -54,21 +54,49 @@ export function scoreByDeviation(dev, threshold) {
   return Math.max(0, Math.round(100 - overflow * 60))
 }
 
+/**
+ * 三庭得分。**上庭只在发际线来自图像实测（source==='scan'）时才参与计分。**
+ *
+ * 为什么：发际线永远不是解剖实测点（`three.estimated` 恒为 true），三级方案里
+ * 只有 scan 是沿着眉心中线真的扫到了皮肤→头发的分界；box 用检测器框顶
+ * （TinyFaceDetector 框通常贴着眉线）、geometric 用「眉上缘 − 5.5×眼裂」这种
+ * 与脸型无关的公式兜底。真实样照上庭算出 45.1%，把三庭打成 0 分、总分 41，
+ * 而这个数**不可复现也不可向客户解释** —— 客户一问「我上庭怎么就失衡了」，
+ * 咨询师答不上来。用不可靠的数据下负面定性，是这套评分最伤人的地方。
+ *
+ * 不可信时不硬猜，只拿有解剖标志的中庭与下庭计分，上庭转为「参考值」展示。
+ */
 function scoreThree(three) {
-  if (!three || !Number.isFinite(three.upper)) return 0
-  const dev = Math.max(
-    Math.abs(three.upper - IDEAL.three),
-    Math.abs(three.middle - IDEAL.three),
-    Math.abs(three.lower - IDEAL.three),
-  )
+  if (!three || !Number.isFinite(three.lower) || !Number.isFinite(three.middle)) return 0
+  const useUpper = three.source === 'scan' && Number.isFinite(three.upper)
+  const dev = useUpper
+    ? Math.max(
+        Math.abs(three.upper - IDEAL.three),
+        Math.abs(three.middle - IDEAL.three),
+        Math.abs(three.lower - IDEAL.three),
+      )
+    : Math.max(Math.abs(three.middle - IDEAL.three), Math.abs(three.lower - IDEAL.three))
   return scoreByDeviation(dev, THRESHOLDS.three)
 }
 
+/** 上庭是否参与三庭计分（UI 要据此标注，避免咨询师误读分数） */
+export function upperThirdScored(three) {
+  return !!three && three.source === 'scan' && Number.isFinite(three.upper)
+}
+
+/**
+ * 等级措辞一律**指向行动、不给客户定性**。
+ *
+ * 旧版最低档叫「明显失衡」，配上红色大字，客户坐下第一眼看到的是一张对自己
+ * 脸的负面判决书 —— 制造焦虑式营销短期能压单，长期毁信任，而且一旦客户追问
+ * 「凭什么说我失衡」，分数背后的估算数据撑不住这个结论。
+ * 改为描述「可改善的空间有多大」，咨询师念出来是顺的，客户听着也不刺痛。
+ */
 function gradeOf(total) {
-  if (total >= 85) return '协调'
-  if (total >= 70) return '较协调'
-  if (total >= 55) return '可优化'
-  return '明显失衡'
+  if (total >= 85) return '比例协调'
+  if (total >= 70) return '基本协调'
+  if (total >= 55) return '有改善空间'
+  return '可重点改善'
 }
 
 // ---------------------------------------------------------------- 处方
@@ -119,21 +147,23 @@ function buildAdvice(metrics, params) {
       priority: 'high',
     })
   }
-  if (Number.isFinite(golden) && golden > 0.65) {
+  // 下庭占比 = 下庭 /（中庭＋下庭），理想 0.5（中庭与下庭等长）。
+  // 偏高 = 下庭相对长；偏低 = 下庭相对短。两条互斥，不会同时出现。
+  if (Number.isFinite(golden) && golden < IDEAL.golden - 0.05) {
     list.push({
-      target: '中庭',
-      action: '中庭偏长，可适度提升下巴',
-      delta: Math.round((golden - IDEAL.golden) * 1000) / 10,
-      reason: `黄金分割比 ${golden.toFixed(3)}，高于 0.65`,
+      target: '下庭',
+      action: '下庭相对偏短，可适度提升下巴',
+      delta: Math.round((IDEAL.golden - golden) * 1000) / 10,
+      reason: `下庭占比 ${golden.toFixed(3)}，低于 ${(IDEAL.golden - 0.05).toFixed(2)}（中庭相对偏长）`,
       priority: 'low',
     })
   }
-  if (Number.isFinite(golden) && golden < 0.58) {
+  if (Number.isFinite(golden) && golden > IDEAL.golden + 0.05) {
     list.push({
-      target: '下庭',
-      action: '下庭偏短，可考虑下巴微调',
-      delta: Math.round((IDEAL.golden - golden) * 1000) / 10,
-      reason: `黄金分割比 ${golden.toFixed(3)}，低于 0.58`,
+      target: '中庭',
+      action: '中庭相对偏短，可考虑鼻部微调',
+      delta: Math.round((golden - IDEAL.golden) * 1000) / 10,
+      reason: `下庭占比 ${golden.toFixed(3)}，高于 ${(IDEAL.golden + 0.05).toFixed(2)}（下庭相对偏长）`,
       priority: 'low',
     })
   }
@@ -179,7 +209,7 @@ function buildCopy(metrics, score) {
     `中庭占比 ${middle}%，${comment(three.middle, '略显偏长', '略显偏短')}；`,
     `下庭占比 ${lower}%，${comment(three.lower, '相对偏长', '相对偏短')}。`,
     `五眼分布偏差 ${fiveDev}%，左右对称度偏差 ${sym}%，`,
-    `黄金分割比 ${gold}（理想值 0.618）。`,
+    `下庭占下面部比例 ${gold}（理想值 0.500，即中庭与下庭等长）。`,
     `综合评级：${score.grade}（${score.total} 分）。`,
   ].join('')
 }

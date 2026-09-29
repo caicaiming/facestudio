@@ -97,7 +97,7 @@ const sysRows = await page.locator('.ann-layer.sys').count()
 const sysKeys = await page.evaluate(() =>
   [...document.querySelectorAll('.ann-layer.sys')].map((el) => el.dataset.key),
 )
-check('① 面板列出 10 个系统层', sysRows === 10, `${sysRows} 行：${sysKeys.join(',')}`)
+check('① 面板列出 11 个系统层', sysRows === 11, `${sysRows} 行：${sysKeys.join(',')}`)
 check(
   '①b 关键叠加内容都在（照片/网格/点位/三庭/对称/部位/自定义/基准点）',
   ['photo', 'warp', 'mesh', 'points', 'three', 'symmetry', 'sites', 'custom', 'anchors'].every((k) =>

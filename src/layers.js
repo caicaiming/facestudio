@@ -47,6 +47,10 @@ export const SYS_LAYERS = [
   { key: 'relief', name: '凹凸光影', band: 1, icon: '◐', def: true,
     hint: '部位凹凸档位渲染出的高光与阴影 —— 凸起迎光变亮、背光变暗，凹陷相反。'
       + '贴在形变照上，只改明暗不遮纹理；关掉则只看轮廓变化。' },
+  { key: 'diff', name: '差异热区', band: 1, icon: '◈', def: true,
+    hint: '把「哪里动了、动了多少」标成暖色 —— 医美形变量往往只有一两个像素，'
+      + '对照时肉眼很难察觉，客户会问「你改了什么」。开了这层，改过的区域一眼可见。'
+      + '没动的地方完全透明，不影响照片观感。' },
   { key: 'mesh', name: '三角网格', band: 3, icon: '◺', def: true,
     hint: '68 点连成的三角网格 —— 形变的实际作用域，自带小点位做参照。' },
   { key: 'points', name: '68 点位', band: 3, icon: '⁘', def: false,

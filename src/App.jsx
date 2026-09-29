@@ -150,7 +150,7 @@ const COMPARE_ROWS = [
   { key: 'lower', label: '下庭', ideal: IDEAL.three, eps: EPS_PCT1, get: (m) => m.three.lower, fmt: (v) => `${PCT(v)}%`, dfmt: D_PCT },
   { key: 'five', label: '五眼偏差', ideal: 0, eps: EPS_PCT1, get: (m) => m.five.deviation, fmt: (v) => `${PCT(v)}%`, dfmt: D_PCT },
   { key: 'symmetry', label: '对称偏差', ideal: 0, eps: EPS_SYM, get: (m) => m.symmetry, fmt: (v) => `${v.toFixed(1)}%`, dfmt: (d) => `${d > 0 ? '+' : ''}${d.toFixed(1)}` },
-  { key: 'golden', label: '黄金分割', ideal: IDEAL.golden, eps: EPS_PCT1, get: (m) => m.golden, fmt: (v) => v.toFixed(3), dfmt: (d) => D_NUM(d, 3) },
+  { key: 'golden', label: '下庭占比', ideal: IDEAL.golden, eps: EPS_PCT1, get: (m) => m.golden, fmt: (v) => v.toFixed(3), dfmt: (d) => D_NUM(d, 3) },
   { key: 'balance', label: '视觉重心', ideal: IDEAL.balance, eps: EPS_PCT1, get: (m) => m.balance, fmt: (v) => v.toFixed(3), dfmt: (d) => D_NUM(d, 3) },
 ]
 
@@ -2021,6 +2021,8 @@ export default function App() {
                 view="adjustment"
                 showWarp
                 relief={{ anchors: reliefAnchors, values: deferredSiteDepths }}
+                // 差异热区：形变往往只有一两个像素，靠它让客户一眼看出改了哪里
+                showDiff={isLayerOn(layerState, 'diff')}
                 maxEdge={900}
                 triangles={triangles}
                 customCount={0}
@@ -2161,7 +2163,7 @@ export default function App() {
                           three: '三庭',
                           five: '五眼',
                           symmetry: '对称',
-                          golden: '黄金分割',
+                          golden: '下庭占比',
                           balance: '视觉重心',
                         }[k]}
                       </span>
@@ -2209,9 +2211,9 @@ export default function App() {
                     <td className="dim">0%</td>
                   </tr>
                   <tr>
-                    <td>黄金分割</td>
+                    <td>下庭占比</td>
                     <td>{metrics.golden.toFixed(3)}</td>
-                    <td className="dim">0.618</td>
+                    <td className="dim">0.500</td>
                   </tr>
                   <tr>
                     <td>视觉重心</td>
@@ -2228,7 +2230,13 @@ export default function App() {
             ) : (
               <p className="dim">无法测量</p>
             )}
-            <p className="note">* 上庭基于发际线估算，非实测值。</p>
+            <p className="note">
+              * 上庭基于发际线推断，非解剖实测点
+              {metrics?.three?.source === 'scan'
+                ? '（本次为图像扫描值，已参与三庭计分）'
+                : '（本次非扫描值，不计入三庭得分，仅作参考）'}
+              。
+            </p>
           </div>
 
           {/* ---------------- 调整对比 ---------------- */}

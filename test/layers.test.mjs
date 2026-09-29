@@ -47,9 +47,9 @@ test('T18a 默认状态：照片/网格/部位/自定义点/基准点可见，�
   assert.equal(layerMarkerScale(st, 'mesh'), 1)
 })
 
-test('T18b 系统层定义自洽：10 层，层名唯一，band 只有 0/1/3', () => {
-  assert.equal(SYS_LAYERS.length, 10)
-  assert.equal(new Set(SYS_KEYS).size, 10)
+test('T18b 系统层定义自洽：11 层，层名唯一，band 只有 0/1/3', () => {
+  assert.equal(SYS_LAYERS.length, 11)
+  assert.equal(new Set(SYS_KEYS).size, 11)
   for (const l of SYS_LAYERS) {
     assert.ok(l.name && l.icon && l.hint, `${l.key} 缺展示信息`)
     assert.ok([0, 1, 3].includes(l.band), `${l.key} band 非法`)
@@ -144,9 +144,9 @@ test('T18i 摊平后的栈：系统底图 → 形变 → 素材 → 标记 → �
   const stack = flattenStack(st, [mat('m1'), arrow('a1')])
   const bands = stack.map((r) => r.band)
   const kinds = stack.map((r) => r.id)
-  // 光影紧跟形变照：它贴在照片上，必须在素材与点位之下
-  assert.deepEqual(kinds.slice(0, 3), ['sys:photo', 'sys:warp', 'sys:relief'])
-  assert.equal(kinds[3], 'm1', '素材必须在标记层之前（点位之下）')
+  // 光影紧跟形变照；差异热区再压在光影之上（它是要被看见的标记，不能被 soft-light 吃掉）
+  assert.deepEqual(kinds.slice(0, 4), ['sys:photo', 'sys:warp', 'sys:relief', 'sys:diff'])
+  assert.equal(kinds[4], 'm1', '素材必须在标记层之前（点位之下）')
   assert.equal(kinds[kinds.length - 1], 'a1', '画线必须在最上（点位之上）')
   // band 单调不减：不允许出现「画线在素材下面」这类穿越
   for (let i = 1; i < bands.length; i++) assert.ok(bands[i] >= bands[i - 1], `第 ${i} 项 band 回退`)

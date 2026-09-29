@@ -236,13 +236,14 @@ export function suggestFromMetrics(points, metrics, scale, values = {}) {
     })
   }
 
-  // 中庭相对下庭偏长 → 同样靠颏部平衡（黄金比偏大）
-  if (Number.isFinite(golden) && golden > 0.65 && !already('chin') && fhMm > 0) {
-    const needMm = clamp((golden - 0.618) * 8, 1, 5)
+  // 下庭占比偏低（中庭相对偏长）→ 靠颏部平衡
+  // golden 语义为「下庭 /（中庭＋下庭）」，理想 0.5，见 measure.js IDEAL 注释
+  if (Number.isFinite(golden) && golden < 0.45 && !already('chin') && fhMm > 0) {
+    const needMm = clamp((0.5 - golden) * 20, 1, 5)
     out.push({
       key: 'chin',
       mm: needMm,
-      evidence: `黄金分割比 ${golden.toFixed(3)}，高于 0.65（中庭相对下庭偏长）`,
+      evidence: `下庭占比 ${golden.toFixed(3)}，低于 0.45（中庭相对下庭偏长）`,
       confidence: 'low',
       reason: '颏部适度加长可平衡中下庭比例',
     })
@@ -265,12 +266,12 @@ export function suggestFromMetrics(points, metrics, scale, values = {}) {
     })
   }
 
-  // 中庭偏短 → 鼻部填充（在视觉上拉长中庭）
-  if (Number.isFinite(golden) && golden < 0.58 && !already('noseDorsum') && !already('noseRoot')) {
+  // 下庭占比偏高（中庭相对偏短）→ 鼻部填充（在视觉上拉长中庭）
+  if (Number.isFinite(golden) && golden > 0.55 && !already('noseDorsum') && !already('noseRoot')) {
     out.push({
       key: 'noseRoot',
-      mm: clamp((0.618 - golden) * 8, 0.8, 3),
-      evidence: `黄金分割比 ${golden.toFixed(3)}，低于 0.58（中庭相对下庭偏短）`,
+      mm: clamp((golden - 0.5) * 20, 0.8, 3),
+      evidence: `下庭占比 ${golden.toFixed(3)}，高于 0.55（中庭相对下庭偏短）`,
       confidence: 'low',
       reason: '鼻根抬高可增加中庭视觉长度',
     })
@@ -494,7 +495,7 @@ export function renderPlanText(p) {
       `三庭：上 ${P1(p.metrics.three.upper)} / 中 ${P1(p.metrics.three.middle)} / 下 ${P1(p.metrics.three.lower)}`,
     )
     L.push(`五眼偏差：${P1(p.metrics.five.deviation)}　对称偏差：${Number.isFinite(p.metrics.symmetry) ? p.metrics.symmetry.toFixed(1) + '%' : '—'}`)
-    L.push(`黄金分割比：${Number.isFinite(p.metrics.golden) ? p.metrics.golden.toFixed(3) : '—'}`)
+    L.push(`下庭占比：${Number.isFinite(p.metrics.golden) ? p.metrics.golden.toFixed(3) : '—'}（理想 0.500）`)
     if (p.adjustedMetrics?.valid) {
       L.push(
         `调整后三庭：上 ${P1(p.adjustedMetrics.three.upper)} / 中 ${P1(p.adjustedMetrics.three.middle)} / 下 ${P1(p.adjustedMetrics.three.lower)}`,

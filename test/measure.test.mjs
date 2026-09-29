@@ -6,6 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  IDEAL,
   measureFace,
   getDeformedPoints,
   generateLandmarks,
@@ -13,7 +14,13 @@ import {
   LEFT_HALF,
   MID_LINE,
 } from '../src/measure.js'
-import { analyzeFace, scoreByDeviation, DEFAULT_PARAMS, SLIDERS } from '../src/analyze.js'
+import {
+  analyzeFace,
+  scoreByDeviation,
+  upperThirdScored,
+  DEFAULT_PARAMS,
+  SLIDERS,
+} from '../src/analyze.js'
 
 /** 构造一张「长脸」：把中庭拉长 20% */
 function makeLongFace() {
@@ -182,4 +189,92 @@ test('T6b 滑块定义与默认参数一一对应', () => {
     assert.ok(s.key in DEFAULT_PARAMS, `滑块 ${s.key} 缺少默认参数`)
     assert.ok(s.min < 0 && s.max > 0, `滑块 ${s.key} 必须是双向的`)
   }
+})
+
+// ---------------------------------------------------------------- T7 评分体系修复守卫
+// 这一组锁的是咨询师走查（Stage 34）发现的两个硬伤：
+//   ① 「黄金分割＝中庭/下庭，理想 0.618」与三庭均等数学互斥，标准脸恒 0 分；
+//   ② 上庭来自发际线推断，却主导权重最高的三庭项。
+// 两者都会让咨询师在客户面前报出一个自己解释不了的低分，故单独立一组防回归。
+
+/** 直接构造 Metrics，绕开点位，精确控制每一项 */
+function mkMetrics({ up = 1 / 3, mid = 1 / 3, low = 1 / 3, source = 'scan', balance = 0.55 } = {}) {
+  return {
+    three: { upper: up, middle: mid, lower: low, estimated: true, source },
+    five: { segments: [], ratios: [0.2, 0.2, 0.2, 0.2, 0.2], deviation: 0 },
+    symmetry: 0,
+    golden: mid + low > 0 ? low / (mid + low) : null,
+    balance,
+    focal: null,
+    yaw: 0,
+    confidence: 0.9,
+    faceTop: 0,
+    faceHeight: 100,
+    valid: true,
+    reason: null,
+  }
+}
+
+test('T7a 下庭占比的语义：下庭 /（中庭＋下庭），落在 0–1 且三庭均等时为 0.5', () => {
+  assert.equal(IDEAL.golden, 0.5, '理想值必须是 0.5，0.618 与三庭互斥')
+  const m = mkMetrics()
+  assert.equal(m.golden, 0.5)
+  // 下庭越长占比越高，方向与旧语义（中庭/下庭）相反
+  assert.ok(mkMetrics({ up: 0.2, mid: 0.3, low: 0.5 }).golden > 0.5)
+  assert.ok(mkMetrics({ up: 0.2, mid: 0.5, low: 0.3 }).golden < 0.5)
+})
+
+test('T7b 真实点位测出的 golden 与三庭自洽（下庭占比 = 下庭/(中庭+下庭)）', () => {
+  const pts = generateLandmarks(1)
+  const m = measureFace(pts, 800, 800, { x: 0, y: 0, width: 800, height: 800 }, 0.8, null)
+  const expect = m.three.lower / (m.three.middle + m.three.lower)
+  assert.ok(Math.abs(m.golden - expect) < 1e-9, `golden=${m.golden} 应等于 ${expect}`)
+  assert.ok(m.golden > 0 && m.golden < 1, '占比必须落在 0–1')
+})
+
+test('T7c 互斥已解除：教科书标准脸（三庭 1:1:1）能拿到接近满分', () => {
+  const s = analyzeFace(mkMetrics()).score
+  assert.equal(s.items.three, 100)
+  assert.equal(s.items.golden, 100, '三庭均等时下庭占比必须满分（旧定义此处恒为 0）')
+  assert.ok(s.total >= 95, `标准脸综合分应接近满分，实际 ${s.total}`)
+})
+
+test('T7d 上庭只在发际线来自图像扫描时计分', () => {
+  assert.equal(upperThirdScored(mkMetrics({ source: 'scan' }).three), true)
+  assert.equal(upperThirdScored(mkMetrics({ source: 'box' }).three), false)
+  assert.equal(upperThirdScored(mkMetrics({ source: 'geometric' }).three), false)
+  assert.equal(upperThirdScored({ upper: null, source: 'scan' }), false, '上庭缺失同样不计分')
+})
+
+test('T7e 发际线不可信时，上庭偏大不再拖垮三庭得分', () => {
+  // 上庭 40% 是推断值（可能只是发型造成的），中下庭真实且接近标准
+  const asScan = analyzeFace(mkMetrics({ up: 0.4, mid: 0.31, low: 0.29, source: 'scan' })).score
+  const asBox = analyzeFace(mkMetrics({ up: 0.4, mid: 0.31, low: 0.29, source: 'box' })).score
+  assert.ok(asBox.items.three > asScan.items.three, '排除估算项后三庭得分应更高')
+  assert.ok(asBox.items.three >= 90, `中下庭接近标准时不应被打低，实际 ${asBox.items.three}`)
+  assert.ok(asScan.items.three < 70, 'scan 下上庭确实参与计分，应明显更低')
+})
+
+test('T7f 评级一律指向行动，不给客户负面定性', () => {
+  const grades = [
+    analyzeFace(mkMetrics()).score.grade,
+    analyzeFace(mkMetrics({ up: 0.45, mid: 0.3, low: 0.25, balance: 0.68 })).score.grade,
+    analyzeFace(mkMetrics({ up: 0.55, mid: 0.25, low: 0.2, balance: 0.75 })).score.grade,
+  ]
+  for (const g of grades) {
+    assert.ok(!/失衡|差|缺陷|畸形/.test(g), `评级「${g}」含负面定性词`)
+  }
+  assert.equal(grades[0], '比例协调')
+})
+
+test('T7g 处方语义与阈值方向一致：下庭占比偏低才建议下巴', () => {
+  // 中庭 0.45 / 下庭 0.35 → 下庭占比 0.4375（偏低）→ 应给下巴类建议
+  const low = analyzeFace(mkMetrics({ up: 0.2, mid: 0.45, low: 0.35, source: 'box' })).advice
+  assert.ok(low.length > 0, '下庭占比 0.4375 应至少产生一条建议')
+  const chinish = low.filter((a) => /下巴|下庭|颏/.test(a.target + a.action))
+  assert.ok(chinish.length > 0, '下庭占比偏低时应给出下巴相关建议')
+  assert.ok(
+    !low.some((a) => /中庭偏短/.test(a.action)),
+    '下庭占比偏低时不应同时说中庭偏短（两条互斥）',
+  )
 })

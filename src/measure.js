@@ -42,7 +42,15 @@ export const LEFT_HALF = [
 export const IDEAL = {
   three: 1 / 3,
   fiveSeg: 0.2,
-  golden: 0.618,
+  /**
+   * 下庭占下面部（中庭＋下庭）的比例，理想 0.5 ＝ 中庭与下庭等长。
+   *
+   * ⚠️ 字段名叫 `golden` 是历史遗留（旧版语义为「黄金分割＝中庭/下庭，理想 0.618」）。
+   * 0.618 与三庭均等在数学上互斥 —— 三庭 1:1:1 时中庭/下庭恰好 1.0，该项恒 0 分，
+   * 教科书标准脸只得 79.9 分、综合分上限被压到 87.4。故改为与三庭兼容的 0.5。
+   * UI 上已改称「下庭占比」，勿再按黄金比 0.618 理解此值。
+   */
+  golden: 0.5,
   balance: 0.55,
 }
 
@@ -108,7 +116,7 @@ function centroid(arr) {
 
 function emptyMetrics(reason) {
   return {
-    three: { upper: null, middle: null, lower: null, estimated: true },
+    three: { upper: null, middle: null, lower: null, estimated: true, source: 'none' },
     five: { segments: [], ratios: [], deviation: null },
     symmetry: null,
     golden: null,
@@ -169,12 +177,21 @@ export function measureFace(
       Math.abs(alongY(points[44], points[46], frame))) /
     4
 
-  const estimated = true // 三种方案均为估算
+  // `estimated` 恒为 true：发际线永远不像眉心/鼻下/颏尖那样是明确的解剖标志，
+  // 三种方案本质上都是推断。真正影响可信度的是**用了哪一级方案**，记在 source：
+  //   scan      图像实测（hairline.js 沿眉心中线扫描皮肤→头发分界）—— 可信度最高
+  //   box       检测器框顶 —— TinyFaceDetector 框通常贴着眉线，只作粗略参考
+  //   geometric 几何兜底（眉上缘 − 5.5 × 眼裂）—— 与脸型无关，最不可信
+  // 评分层据此决定上庭是否参与计分（见 analyze.js 的 scoreThree）。
+  const estimated = true
   let faceTop
+  let hairlineSource = 'geometric'
   if (Number.isFinite(hairlineY) && hairlineY < browTopY) {
     faceTop = hairlineY
+    hairlineSource = 'scan'
   } else if (box && Number.isFinite(box.height) && box.height > 0) {
     faceTop = box.y
+    hairlineSource = 'box'
   } else {
     faceTop = browTopY - 5.5 * eyeOpening
   }
@@ -191,6 +208,7 @@ export function measureFace(
     middle: alongY(points[27], points[33], frame) / faceHeight,
     lower: alongY(points[33], points[8], frame) / faceHeight,
     estimated,
+    source: hairlineSource,
   }
 
   // ---- 五眼（沿基准水平轴）----
@@ -219,10 +237,19 @@ export function measureFace(
   }
   const symmetry = (symSum / RIGHT_HALF.length / W) * 100
 
-  // ---- 黄金分割（沿基准垂直轴）----
+  // ---- 下庭占比（沿基准垂直轴）----
+  // 旧版这里是「黄金分割 = 中庭 / 下庭」，理想值取 0.618。那是**数学上不可能
+  // 与三庭同时成立**的指标：三庭均等时中庭/下庭 = 1.0，偏差 0.382、阈值 0.05，
+  // 得分恒为 0 —— 教科书标准脸反而被判「失衡」，而想让这项及格，下巴必须长得
+  // 比中庭长 1.6 倍。两项权重合计 0.5、区间完全不相交，综合分上限被压到 87.4。
+  //
+  // 改为「下庭占下面部（中庭＋下庭）的比例」，理想 0.5（＝中庭与下庭等长），
+  // 与三庭标准兼容：三庭均等时两项同时满分，综合分可达 100。
+  // 它仍是比例的另一种写法，但落在 0–1 区间、语义直观（下庭越长越显成熟），
+  // 且不再与自家指标打架。
   const midLen = alongY(points[27], points[33], frame)
   const lowLen = alongY(points[33], points[8], frame)
-  const golden = lowLen > 0 ? midLen / lowLen : null
+  const golden = midLen + lowLen > 0 ? lowLen / (midLen + lowLen) : null
 
   // ---- 视觉重心（沿基准垂直轴，faceHeight 同量纲）----
   const featureV =

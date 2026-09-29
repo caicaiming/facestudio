@@ -32,6 +32,7 @@ import { createWarper } from './warp.js'
 import { ANCHOR_BASE, ANCHOR_COUNT } from './anchors.js'
 import { frameFaceWidth, frameOf } from './frame.js'
 import { reliefOf } from './relief.js'
+import { drawDiffMap } from './diffmap.js'
 import { DRAG_GAINS, DEFAULT_DRAG_GAIN_KEY, dampDelta, effectiveGain } from './drag.js'
 import {
   DRAW_TOOLS,
@@ -743,6 +744,11 @@ export default function FaceCanvas({
    * 只有 warp 开着时才画：光影贴在形变后的照片上，warp 关了位置就对不上。
    */
   relief = null,
+  /**
+   * 差异热区开关。数据不用单独传 —— 直接拿本组件的 srcPoints（原始）与
+   * points（形变后）比。由 App 从图层栈的 diff 层取布尔值传进来。
+   */
+  showDiff = false,
 }) {
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   // 由图层栈接管后，「形变预览」层是个真图层：默认关闭，打开才在原图上叠加
@@ -762,6 +768,8 @@ export default function FaceCanvas({
   const reliefRef = useRef(null)
   /** 光影的离屏小画布：光影低频，先画小图再放大，省掉 95% 的逐像素计算 */
   const reliefBufRef = useRef(null)
+  /** 差异热区层：与 warp 同尺寸，标出改过的区域（没动的地方全透明） */
+  const diffRef = useRef(null)
   const overlayRef = useRef(null)
   const meshRef = useRef(null)
   const warperRef = useRef(null)
@@ -990,6 +998,32 @@ export default function FaceCanvas({
         }
       }
 
+      // ---- 差异热区：把改过的区域标成暖色 ----
+      // 只在 warp 开着时画（热区要贴在形变照上），且确实有位移才动笔。
+      const dc = diffRef.current
+      if (dc) {
+        const dctx = dc.getContext('2d')
+        dctx.setTransform(1, 0, 0, 1, 0, 0)
+        dctx.clearRect(0, 0, dc.width, dc.height)
+        const canDiff =
+          showDiff && warpOn && warperRef.current && srcPoints?.length && points?.length
+        if (canDiff) {
+          if (dc.width !== warperRef.current.cw || dc.height !== warperRef.current.ch) {
+            dc.width = warperRef.current.cw
+            dc.height = warperRef.current.ch
+            dctx.setTransform(1, 0, 0, 1, 0, 0)
+          }
+          drawDiffMap(dctx, srcPoints, points, {
+            w: warperRef.current.cw,
+            h: warperRef.current.ch,
+            W: faceWidthOf(points, w),
+            // 热区画在形变照上，位移要先换算到同一套画布像素
+            k: warperRef.current.cw / w,
+            strength: alphaOf('diff'),
+          })
+        }
+      }
+
       // ---- overlay / mesh 层 ----
       // 清空用画布像素坐标，之后切到「自然坐标 × ov」，绘制代码无需感知缩放。
       const octx = oc.getContext('2d')
@@ -1103,6 +1137,8 @@ export default function FaceCanvas({
     // 凹凸：档位变了要重算高度场，点位变了控制点跟着走 —— 两者都得重画光影
     relief?.anchors,
     relief?.values,
+    // 差异热区：开关变了要重画（位移数据取自 srcPoints/points，它们已在依赖里）
+    showDiff,
   ])
 
   // ---------------------------------------------------------------- 缩放 / 放大镜
@@ -1876,6 +1912,15 @@ export default function FaceCanvas({
               style={{
                 display: warpOn && onOf('relief') ? 'block' : 'none',
                 opacity: alphaOf('relief'),
+              }}
+            />
+            {/* 差异热区：暖色标出改过的区域，没动的地方全透明 */}
+            <canvas
+              ref={diffRef}
+              className="layer diff"
+              style={{
+                display: warpOn && showDiff ? 'block' : 'none',
+                opacity: alphaOf('diff'),
               }}
             />
             {/* 素材层在点位【下】：示意图像贴纸一样垫在脸上，点位仍清晰可见 */}
