@@ -7,7 +7,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { GRID_STEP, LIGHT_DEFAULT, heightField, heightPeak, reliefOf, shadeField } from '../src/relief.js'
+import {
+  GRID_STEP,
+  LIGHT_DEFAULT,
+  LIGHT_RIG,
+  blurField,
+  heightField,
+  heightPeak,
+  reliefOf,
+  shadeField,
+} from '../src/relief.js'
 
 /**
  * 造一个单点部位。注意 `radius` 与 zones.js 一致，是**面宽的比例**而非像素：
@@ -150,6 +159,100 @@ test('T20l reliefOf：一步到位，无档位返回 null', () => {
   const r = reliefOf([anchorAt(200, 200, 0.30)], { t: 12 }, OPTS)
   assert.ok(r && r.data.length === r.gw * r.gh * 4)
   assert.equal(reliefOf([], { t: 12 }, OPTS), null)
+})
+
+/**
+ * 取某点灰度。alpha 为 0 表示「无光影」，此时灰度未写入（读出来是 0），
+ * 按语义应视作 128（中性）—— 直接读会得到「死黑」的错误结论。
+ */
+const grayAt = (s, x, y) => {
+  const i = (Math.round(y / GRID_STEP) * s.gw + Math.round(x / GRID_STEP)) * 4
+  return s.data[i + 3] === 0 ? 128 : s.data[i]
+}
+
+const BUMP = (lv) => heightField([anchorAt(200, 200, 0.3)], { t: lv }, OPTS)
+// 采样偏移取 0.7r：再往外高斯已衰减到噪声量级，读不出信号
+const OFF = Math.round(0.3 * 200 * 0.7)
+
+test('T20n 镜面高光：只提亮迎光面，背光面一格不动', () => {
+  const f = BUMP(20)
+  const noSpec = shadeField(f, { ...OPTS, specular: 0, ao: 0 })
+  const withSpec = shadeField(f, { ...OPTS, ao: 0 })
+  const upNo = grayAt(noSpec, 200 - OFF, 200 - OFF)
+  const upYes = grayAt(withSpec, 200 - OFF, 200 - OFF)
+  const dnNo = grayAt(noSpec, 200 + OFF, 200 + OFF)
+  const dnYes = grayAt(withSpec, 200 + OFF, 200 + OFF)
+  assert.ok(upYes > upNo, `迎光应更亮：${upNo} → ${upYes}`)
+  assert.equal(dnYes, dnNo, `背光应完全不动：${dnNo} → ${dnYes}`)
+})
+
+test('T20o 环境光遮蔽：只压凹陷，凸起一格不动', () => {
+  // 少了「自身低于基准面」这道门，凸起周围会被压出一圈不自然的暗环
+  const up = BUMP(20)
+  const dn = BUMP(-20)
+  assert.equal(
+    grayAt(shadeField(up, OPTS), 200, 200),
+    grayAt(shadeField(up, { ...OPTS, ao: 0 }), 200, 200),
+    '凸起中心不应被遮蔽',
+  )
+  const dNo = grayAt(shadeField(dn, { ...OPTS, ao: 0 }), 200, 200)
+  const dYes = grayAt(shadeField(dn, OPTS), 200, 200)
+  assert.ok(dYes < dNo - 10, `凹陷中心应明显更暗：${dNo} → ${dYes}`)
+})
+
+test('T20p 凹陷档位越深越暗，不反弹（回归）', () => {
+  // 曾踩过：极深凹陷的坑底四周一样深，sink 反趋近 0，
+  // 导致档位 −20 最暗、−25 反而变亮 —— 用户调深却变亮，完全反直觉。
+  const levels = [-10, -15, -20, -25, -30]
+  const gs = levels.map((lv) => grayAt(shadeField(BUMP(lv), OPTS), 200, 200))
+  for (let i = 1; i < gs.length; i++) {
+    assert.ok(gs[i] <= gs[i - 1] + 1, `${levels[i - 1]}→${levels[i]} 不该变亮：${gs[i - 1]} → ${gs[i]}`)
+  }
+  assert.ok(gs[gs.length - 1] < gs[0] - 20, `整体应明显变暗：${gs[0]} → ${gs[gs.length - 1]}`)
+})
+
+test('T20q 凸起档位越深越亮，不早饱和', () => {
+  const levels = [5, 10, 15, 20, 25, 30]
+  const gs = levels.map((lv) => grayAt(shadeField(BUMP(lv), OPTS), 200 - OFF, 200 - OFF))
+  for (let i = 1; i < gs.length; i++) {
+    assert.ok(gs[i] > gs[i - 1], `${levels[i - 1]}→${levels[i]} 应继续变亮：${gs[i - 1]} → ${gs[i]}`)
+  }
+  assert.ok(gs[gs.length - 1] < 250, `满档不该打到纯白：${gs[gs.length - 1]}`)
+})
+
+test('T20r blurField：常数场与线性场都保持不变（滑动窗口正确性）', () => {
+  const gw = 16
+  const gh = 16
+  const c = new Float32Array(gw * gh).fill(7.5)
+  const bc = blurField(c, gw, gh, 3)
+  for (let i = 0; i < c.length; i++) {
+    assert.ok(Math.abs(bc[i] - 7.5) < 1e-6, `常数场应保持 7.5，实际 ${bc[i]}`)
+  }
+  // 线性场在对称窗口下均值 = 中心值；边界是 clamp-to-edge，会偏，故只查内部
+  const lin = new Float32Array(gw * gh)
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) lin[y * gw + x] = x * 2 + y * 0.5
+  const bl = blurField(lin, gw, gh, 3)
+  for (let y = 3; y < gh - 3; y++) {
+    for (let x = 3; x < gw - 3; x++) {
+      assert.ok(
+        Math.abs(bl[y * gw + x] - lin[y * gw + x]) < 1e-5,
+        `线性场内部应保持 ${lin[y * gw + x]}，实际 ${bl[y * gw + x]}`,
+      )
+    }
+  }
+})
+
+test('T20s 补光会削弱明暗对比 —— 这是默认只用主光的原因', () => {
+  const f = BUMP(20)
+  const solo = shadeField(f, { ...OPTS, rig: [{ ...LIGHT_DEFAULT, w: 1 }] })
+  const filled = shadeField(f, {
+    ...OPTS,
+    rig: [{ ...LIGHT_DEFAULT, w: 1 }, { x: 0.62, y: -0.22, z: 0.75, w: 0.38 }],
+  })
+  const sContrast = grayAt(solo, 200 - OFF, 200 - OFF) - grayAt(solo, 200 + OFF, 200 + OFF)
+  const fContrast = grayAt(filled, 200 - OFF, 200 - OFF) - grayAt(filled, 200 + OFF, 200 + OFF)
+  assert.ok(fContrast < sContrast, `补光应削弱对比：${sContrast} → ${fContrast}`)
+  assert.equal(LIGHT_RIG.length, 1, '默认光源组应只有主光')
 })
 
 test('T20m 输出不越界：灰度 0–255，alpha 0–255', () => {
