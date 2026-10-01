@@ -24,8 +24,10 @@ const REPEAT_DELAY = 400
 const REPEAT_INTERVAL = 90
 
 const RISK_LABEL = { high: '高风险', mid: '中风险', low: '低风险' }
+/** 窄屏缩写：data-short 交给 CSS 在 ≤1360px 时替换显示，语义不丢（title 仍为全称） */
+const RISK_SHORT = { high: '高', mid: '中', low: '低' }
 
-function Stepper({ value, onChange, disabled }) {
+function Stepper({ value, onChange, disabled, hint = '' }) {
   const timerRef = useRef(0)
   const timeoutRef = useRef(0)
 
@@ -80,7 +82,8 @@ function Stepper({ value, onChange, disabled }) {
       </button>
       <span
         className={`step-val ${value > 0 ? 'pos' : value < 0 ? 'neg' : ''}`}
-        title={`当前档位（−${-RANGE.min} … ＋${RANGE.max}）`}
+        // 毫米数挂在档位上：窄屏会收起那一列，但 hover 仍能读到实际推了多少
+        title={hint ? `当前档位 ${value > 0 ? '+' : ''}${value}（约 ${hint}）` : `当前档位（−${-RANGE.min} … ＋${RANGE.max}）`}
       >
         {value > 0 ? `+${value}` : value}
       </span>
@@ -242,7 +245,13 @@ export default function ZonePanel({
                     >
                       <span className="su-name">
                         {site.label}
-                        <em className={`su-risk ${site.risk}`}>{RISK_LABEL[site.risk]}</em>
+                        <em
+                          className={`su-risk ${site.risk}`}
+                          data-short={RISK_SHORT[site.risk]}
+                          title={`${RISK_LABEL[site.risk]}（须医师评估）`}
+                        >
+                          {RISK_LABEL[site.risk]}
+                        </em>
                         {site.virtual && (
                           <em
                             className="su-virtual"
@@ -253,7 +262,9 @@ export default function ZonePanel({
                         )}
                       </span>
                       <span className="su-hint">
-                        {site.projects[0]}
+                        {/* 项目名单独包一层：窄屏优先把这一列让给两组档位，
+                            而部位名上的风险等级与这里的毫米数必须留住 */}
+                        <i className="su-proj">{site.projects[0]}</i>
                         {mm != null && (
                           <b className="zone-mm">
                             {mm > 0 ? '+' : ''}
@@ -261,12 +272,13 @@ export default function ZonePanel({
                           </b>
                         )}
                       </span>
-                      {/* 位移：轮廓往哪挪 */}
+                      {/* 位移：轮廓往哪挪。tag 在窄屏会被 CSS 换成符号（↔），语义不丢 */}
                       <span className="zone-col" title="平面位移：轮廓往哪挪（X / Y）">
-                        <em className="zone-col-tag">位移</em>
+                        <em className="zone-col-tag move">位移</em>
                         <Stepper
                           value={v}
                           disabled={disabled}
+                          hint={mm != null ? `${mm > 0 ? '+' : ''}${mm.toFixed(1)}mm` : ''}
                           onChange={(updater) => {
                             const cur = v
                             const next = updater(cur)
@@ -280,10 +292,11 @@ export default function ZonePanel({
                           className="zone-col"
                           title="凹凸：垂直于照片平面的深度 —— ＋ 凸起（填充）／ − 凹陷（吸脂）。画面上以高光与阴影呈现"
                         >
-                          <em className="zone-col-tag">凹凸</em>
+                          <em className="zone-col-tag depth">凹凸</em>
                           <Stepper
                             value={dv}
                             disabled={disabled}
+                            hint={fmtMm(dmm) || ''}
                             onChange={(updater) => {
                               const cur = dv
                               const next = updater(cur)

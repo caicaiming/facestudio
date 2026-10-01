@@ -841,6 +841,36 @@ body {
   border-radius: 8px;
 }
 
+/**
+ * 部位脉冲层。
+ *
+ * 调完某个部位后，预览图上该部位闪三圈涟漪（琥珀色）—— 形变本身常常只有
+ * 一两个像素、肉眼不可辨，这一层负责回答「刚刚改的是哪里」。
+ * 指针事件必须关掉：它盖在最上层，抢了事件就没法拖点、没法画标注。
+ */
+.canvas-wrap .layer.pulse {
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+/* 调整撤销 / 重做：与状态胶囊同高，居中对齐 */
+.adj-hist {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.adj-hist .btn-ghost {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.adj-hist-n {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 .canvas-empty {
   width: 100%;
   height: 100%;
@@ -1168,6 +1198,100 @@ body {
   .canvas-duo .canvas-box {
     padding: 10px;
   }
+}
+
+/**
+ * 医美部位行：≤1360px 时把宽度让给两组档位（1280 实测凹凸列会被挤出可视区）。
+ *
+ * 三件事一起做，效果是【仍保持单行】，左栏不会因此变高：
+ *   ① 项目名（.su-proj）先让位 —— 它是最次要的信息，且 title 里有；
+ *   ② 左栏加宽、右栏收窄：这段宽度从右栏借，中栏与照片尺寸不受影响；
+ *   ③ 收窄间距，必要时 flex-wrap 兜底（正常宽度下不会触发）。
+ * 风险等级与毫米数刻意保留：这是安全相关的关键信息，不能为了省地方藏起来。
+ */
+@media (max-width: 1360px) {
+  .layout {
+    grid-template-columns: 274px 1fr 246px;
+  }
+
+  .zone-block .zone-row {
+    gap: 2px;
+  }
+
+  .zone-block .zone-row .su-name {
+    min-width: 48px;
+  }
+
+  /* ≤1360px 收起整个 hint 列（项目名 + 毫米数）。
+     为什么连毫米数一起收：调档后 mm 才出现，留着它的话「没调过的行是 26px、
+     调过的行跳成 50px」，鼠标每点一下下面的行都在抖。
+     数值没丢 —— mm 挂进了 Stepper 的 title，hover 即可读出；≥1361px 照常显示。 */
+  .zone-block .zone-row .su-hint {
+    display: none;
+  }
+
+  .zone-block .zone-row .zone-col {
+    padding-left: 3px;
+    gap: 2px;
+  }
+
+  /* 组标题换符号：「位移」→ ↔、「凹凸」→ ◐。
+     font-size:0 藏掉文字、用 ::before 注入符号 —— 省下的宽度正好换取单行，
+     而 title 与面板顶部 note 里都写着全称，语义没有丢。 */
+  .zone-block .zone-row .zone-col-tag {
+    font-size: 0;
+    line-height: 0;
+  }
+
+  .zone-block .zone-row .zone-col-tag::before {
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .zone-block .zone-row .zone-col-tag.move::before {
+    content: '↔';
+  }
+
+  .zone-block .zone-row .zone-col-tag.depth::before {
+    content: '◐';
+  }
+
+  /* 风险等级缩为一个字（高风险 → 高）：等级不能藏，这是安全相关信息，
+     但等级已经编码在颜色里（.su-risk.high/.mid/.low），短字足够表意。 */
+  .zone-block .zone-row .su-risk {
+    font-size: 0;
+    line-height: 0;
+    padding: 0 2px;
+  }
+
+  .zone-block .zone-row .su-risk::before {
+    content: attr(data-short);
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  /* 「推演」标记让位：它是次要说明（68 点在该区域无点位、形变为近似模拟），
+     在 row 的 title 里仍然写得清清楚楚，不占窄屏的行宽。 */
+  .zone-block .zone-row .su-virtual {
+    display: none;
+  }
+
+  .zone-block .zone-row .stepper .step-btn {
+    padding: 0 3px;
+  }
+
+  .zone-block .zone-row .step-val {
+    min-width: 1.6em;
+  }
+
+  /* 兜底：万一更窄的行仍放不下，换行也比被裁掉强 */
+  .zone-block .zone-row {
+    flex-wrap: wrap;
+  }
+}
+
+.su-proj {
+  font-style: normal;
 }
 
 /* 视口不足 1200px 时退回整页滚动：

@@ -749,12 +749,98 @@ export default function FaceCanvas({
    * points（形变后）比。由 App 从图层栈的 diff 层取布尔值传进来。
    */
   showDiff = false,
+  /**
+   * 刚刚调过的部位：{ key, at }。
+   * 在预览图上把该部位的作用区域画一圈涟漪 —— 细小形变肉眼看不出时，
+   * 至少让「改的是这里」这件事可见（交互审核 P0-1 的过渡疗法）。
+   */
+  pulse = null,
 }) {
+
   // 未显式指定时沿用旧行为：仅「调整」视图显示形变照
   // 由图层栈接管后，「形变预览」层是个真图层：默认关闭，打开才在原图上叠加
   const warpOn = layerState ? isLayerOn(layerState, 'warp') : showWarp ?? view === 'adjustment'
   // 'none' 表示纯净照片（预览区），不绘制任何叠加层
   const drawOverlay = overlay !== 'none' && view !== 'reference'
+  /**
+   * 部位脉冲动画。
+   *
+   * 为什么单独一个画布 + 单独一段 rAF：
+   * 主绘制走的是 props → useEffect 的重绘链路，一次要重算 warp / relief / diff
+   * 三层（几十毫秒）。脉冲只是几毫秒的一圈涟漪，混进去既拖慢主流程，
+   * 也会因为 props 没变而不再被调用 —— 动画必须自己按时间推进。
+   *
+   * 坐标：warp 画布对超大图降过采样，比例 k = cw / 自然宽；
+   * 部位锚点是自然坐标，乘 k 即落到本画布。
+   */
+  useEffect(() => {
+    const cv = pulseRef.current
+    if (!cv) return
+    if (!pulse || !warpOn || !relief?.anchors) {
+      const c = cv.getContext('2d')
+      c.setTransform(1, 0, 0, 1, 0, 0)
+      c.clearRect(0, 0, cv.width, cv.height)
+      return
+    }
+    const hit = relief.anchors.find((a) => a.site?.key === pulse.key)
+    const base = hit?.pts?.length ? hit.pts : null
+    const img = imgRef.current
+    const natW = img?.naturalWidth || img?.width || 0
+    if (!base || !natW || !warperRef.current) return
+
+    const k = warperRef.current.cw / natW
+    const cw = warperRef.current.cw
+    const ch = warperRef.current.ch
+    if (cv.width !== cw || cv.height !== ch) {
+      cv.width = cw
+      cv.height = ch
+    }
+    const ctx = cv.getContext('2d')
+    const DUR = 1600
+    const t0 = performance.now()
+    let raf = 0
+
+    const frame = (now) => {
+      const p = Math.min(1, (now - t0) / DUR)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, cw, ch)
+      // 淡入淡出：sin 保证首尾 alpha 为 0，不会出现「突然出现 / 突然消失」
+      const env = Math.sin(Math.PI * p)
+      const unit = cw * 0.012
+      for (const pt of base) {
+        const cx = pt.x * k
+        const cy = pt.y * k
+        // 三圈同心涟漪：由内向外依次扩散，比单个圆环更像「刚才动了这里」
+        for (let n = 0; n < 3; n++) {
+          const rp = p + n * 0.18
+          const r = unit * (2 + rp * 7)
+          ctx.beginPath()
+          ctx.arc(cx, cy, r, 0, Math.PI * 2)
+          ctx.lineWidth = unit * 0.5
+          ctx.strokeStyle = `rgba(251, 191, 36, ${(0.85 * env * (1 - n * 0.28)).toFixed(3)})`
+          ctx.stroke()
+        }
+        ctx.beginPath()
+        ctx.arc(cx, cy, unit * 1.6, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(251, 191, 36, ${(0.9 * env).toFixed(3)})`
+        ctx.fill()
+      }
+      if (p < 1) raf = requestAnimationFrame(frame)
+      else {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, cw, ch)
+      }
+    }
+    raf = requestAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(raf)
+      const c = cv.getContext('2d')
+      c.setTransform(1, 0, 0, 1, 0, 0)
+      c.clearRect(0, 0, cv.width, cv.height)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulse, warpOn, relief])
+
   /** 图层栈：没传就用默认（等价于旧行为的「只画网格」） */
   const LS = layerState || EMPTY_LAYER_STATE
   const onOf = (key) => isLayerOn(LS, key)
@@ -770,6 +856,8 @@ export default function FaceCanvas({
   const reliefBufRef = useRef(null)
   /** 差异热区层：与 warp 同尺寸，标出改过的区域（没动的地方全透明） */
   const diffRef = useRef(null)
+  /** 部位脉冲：调哪个部位就在预览上闪一下，独立于主绘制流程走 rAF */
+  const pulseRef = useRef(null)
   const overlayRef = useRef(null)
   const meshRef = useRef(null)
   const warperRef = useRef(null)
@@ -1923,6 +2011,8 @@ export default function FaceCanvas({
                 opacity: alphaOf('diff'),
               }}
             />
+            {/* 部位脉冲：独立于主绘制流程，由下面的 rAF 自己刷 */}
+            <canvas ref={pulseRef} className="layer pulse" />
             {/* 素材层在点位【下】：示意图像贴纸一样垫在脸上，点位仍清晰可见 */}
             {ann?.enabled && <canvas ref={matRef} className="layer annot-mats" />}
             <canvas ref={overlayRef} className="layer overlay" />

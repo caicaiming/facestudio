@@ -108,6 +108,24 @@ const CUSTOM_OFFSET_RANGE = 60
 /** 标注撤销栈深度：标注数量本就不多，30 步足够覆盖一次沟通的全部改动 */
 const ANN_UNDO_MAX = 30
 
+/**
+ * 调整撤销栈深度（ Stage 35 新增）。
+ * 一次咨询里反复试参数的次数远多于画标注，取 40 兜住整场沟通。
+ */
+const ADJ_UNDO_MAX = 40
+/**
+ * 合并窗口（毫秒）：同一个来源在这个窗口内的连续改动算【一次】操作。
+ *
+ * 拖一次滑块会连续触发几十次 onChange、拖一个点每帧都回调 —— 若次次入栈，
+ * 撤销一步只能退回一帧，用户得按几十次 Ctrl+Z 才回到拖动前。
+ *
+ * 必须是【滑动】窗口：命中要刷新时刻。固定窗口下（从第一次起算 700ms）
+ * 连点 ＋ 八次要受重渲染耗时拖累，累计一超时就断成两步；滑动之后则是
+ * 「任意相邻两次间隔 < 700ms 就一直算同一步，停手超过 700ms 再动才算新一步」——
+ * 这正是手势的直觉边界。
+ */
+const ADJ_MERGE_MS = 700
+
 /** 加点时与已有点的最小间距（相对图片宽度），避免产生退化三角形 */
 const MIN_POINT_GAP_RATIO = 0.012
 
@@ -453,6 +471,10 @@ export default function App() {
         setLayerSel(null)
         setAnnPast([])
         setAnnFuture([])
+        // 调整栈同样作废：上一张脸的参数套到新脸上没有意义，
+        // 更糟的是撤销会跳出一张三不像的脸
+        setAdjPast([])
+        setAdjFuture([])
         resetAutoTune()
         setView('detection')
         // 换图不清用户的图层设置，只兜底一种情况：四个叠加层全关着时
@@ -637,32 +659,118 @@ export default function App() {
     return view === 'reference' ? srcFull : editedPoints
   }, [points, view, editedPoints, srcFull])
 
-  // ---- 逐点位移回调 ----
-  const setOffset = useCallback((i, dx, dy) => {
-    setPointOffsets((prev) => {
-      const next = prev.slice()
-      next[i] = { dx, dy }
-      return next
-    })
+  /**
+   * 部位脉冲：调某个医美部位时，在预览图上把该部位的作用区域高亮约 1.6 秒。
+   *
+   * 起因是交互审核里那个残酷的实测 —— 苹果肌推满 +30 档，预览画布二十万像素里
+   * 只有 46 个在变，肉眼完全看不出来。形变本身做出来之前（那是更大的一摊改动），
+   * 先得让顾客与咨询师看见「刚刚改的是这里」，否则这一步操作是隐形的。
+   */
+  const [sitePulse, setSitePulse] = useState(null)
+  const pulseSite = useCallback((key) => {
+    setSitePulse({ key, at: Date.now() })
   }, [])
 
-  /** 画布拖拽：增量累加到该点既有位移上 */
-  const handlePointDrag = useCallback((i, ddx, ddy) => {
-    if (i >= CUSTOM_BASE) {
-      const n = i - CUSTOM_BASE
-      setCustomPoints((prev) =>
-        prev.map((c, k) => (k === n ? { ...c, dx: c.dx + ddx, dy: c.dy + ddy } : c)),
-      )
-    } else {
+  // ---- 调整历史栈：撤销 / 重做（Stage 35）----
+  // 标注栈只管标注；这里管另外六套「调整」状态的回退通道：
+  //   5 路滑块 / 逐点位移 / 自定义点 / 亚单位 / 部位位移 / 部位凹凸
+  // 此前这六套一个都撤不了 —— 调坏了只能逐个归零从头再来，咨询师当着
+  // 顾客的面不敢试错。交互审核里实测 Ctrl+Z 完全无效，是 P0 的一条。
+  const [adjPast, setAdjPast] = useState([])
+  const [adjFuture, setAdjFuture] = useState([])
+  /** 供只绑定一次的回调读取最新六套状态（同 annLayersRef 的写法） */
+  const adjStateRef = useRef(null)
+  adjStateRef.current = {
+    params,
+    pointOffsets,
+    customPoints,
+    subunitValues,
+    siteValues,
+    siteDepths,
+  }
+  /** 上一次入栈的来源与时刻，用于合并同一次手势内的连续改动 */
+  const adjMergeRef = useRef({ key: null, t: 0 })
+
+  /**
+   * 改动【之前】调用：把当前六套状态压入撤销栈。
+   *
+   * adjStateRef 在 render 期间赋值，这里读到的必然是「这一次改动之前」的值
+   * —— 顺序很重要，写在 setState 之后就存成了改完的样子，撤销等于没撤。
+   */
+  const pushAdj = useCallback((key) => {
+    const now = Date.now()
+    const m = adjMergeRef.current
+    if (m.key === key && now - m.t < ADJ_MERGE_MS) {
+      m.t = now // 滑动窗口：连点 / 拖动期间始终算同一步
+      return
+    }
+    adjMergeRef.current = { key, t: now }
+    const snap = { ...adjStateRef.current }
+    setAdjPast((p) => [...p.slice(-(ADJ_UNDO_MAX - 1)), snap])
+    setAdjFuture([])
+  }, [])
+
+  const applyAdjSnap = useCallback((s) => {
+    if (!s) return
+    setParams(s.params)
+    setPointOffsets(s.pointOffsets)
+    setCustomPoints(s.customPoints)
+    setSubunitValues(s.subunitValues)
+    setSiteValues(s.siteValues)
+    setSiteDepths(s.siteDepths)
+  }, [])
+
+  const undoAdj = useCallback(() => {
+    if (adjPast.length === 0) return
+    const prev = adjPast[adjPast.length - 1]
+    setAdjPast(adjPast.slice(0, -1))
+    setAdjFuture((f) => [{ ...adjStateRef.current }, ...f])
+    applyAdjSnap(prev)
+  }, [adjPast, applyAdjSnap])
+
+  const redoAdj = useCallback(() => {
+    if (adjFuture.length === 0) return
+    const next = adjFuture[0]
+    setAdjFuture(adjFuture.slice(1))
+    setAdjPast((p) => [...p, { ...adjStateRef.current }])
+    applyAdjSnap(next)
+  }, [adjFuture, applyAdjSnap])
+
+  // ---- 逐点位移回调 ----
+  const setOffset = useCallback(
+    (i, dx, dy) => {
+      pushAdj(`pt:${i}`)
       setPointOffsets((prev) => {
         const next = prev.slice()
-        const o = next[i] || { dx: 0, dy: 0 }
-        next[i] = { dx: o.dx + ddx, dy: o.dy + ddy }
+        next[i] = { dx, dy }
         return next
       })
-    }
-    setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
-  }, [])
+    },
+    [pushAdj],
+  )
+
+  /** 画布拖拽：增量累加到该点既有位移上 */
+  const handlePointDrag = useCallback(
+    (i, ddx, ddy) => {
+      // 一次拖动按【一次】操作记录 —— merge 窗口会把沿途每帧的回调合并掉
+      pushAdj(`drag:${i}`)
+      if (i >= CUSTOM_BASE) {
+        const n = i - CUSTOM_BASE
+        setCustomPoints((prev) =>
+          prev.map((c, k) => (k === n ? { ...c, dx: c.dx + ddx, dy: c.dy + ddy } : c)),
+        )
+      } else {
+        setPointOffsets((prev) => {
+          const next = prev.slice()
+          const o = next[i] || { dx: 0, dy: 0 }
+          next[i] = { dx: o.dx + ddx, dy: o.dy + ddy }
+          return next
+        })
+      }
+      setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
+    },
+    [pushAdj],
+  )
 
   const handlePointSelect = useCallback((i) => {
     setSelectedPoint(i)
@@ -736,22 +844,25 @@ export default function App() {
       // 连续反解会层层累积（同一次目标第二次结果更高），结果不再可复现。
       const r = autoTune({ points, base, target: goal })
       tuneSnapshotRef.current = { params, pointOffsets }
+      pushAdj('auto')
       setParams(r.params)
       setPointOffsets(r.offsets)
       setView('adjustment')
       setTuneResult(describeTune(r, goal))
       setTuning(false)
     }, 30)
-  }, [points, base, targetScore, params, pointOffsets, describeTune])
+  }, [points, base, targetScore, params, pointOffsets, describeTune, pushAdj])
 
   const undoAutoTune = useCallback(() => {
     const snap = tuneSnapshotRef.current
     if (!snap) return
+    // 这本身也是一次状态变更，照样要能撤回来
+    pushAdj('auto-undo')
     setParams(snap.params)
     setPointOffsets(snap.pointOffsets)
     tuneSnapshotRef.current = null
     setTuneResult(null)
-  }, [])
+  }, [pushAdj])
 
   // 换图后探一次「可达上限」，让用户在输入目标前就知道这张脸能被推到多高
   useEffect(() => {
@@ -776,20 +887,27 @@ export default function App() {
         if (Math.hypot(p.x - x, p.y - y) < minGap) return
       }
       const index = CUSTOM_BASE + customPoints.length
+      pushAdj('custom-add')
       setCustomPoints((prev) => [...prev, { id: `${Date.now()}_${prev.length}`, x, y, dx: 0, dy: 0 }])
       setSelectedPoint(index)
       setAddMode(false)
       setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
     },
-    [srcFull, base, customPoints.length],
+    [srcFull, base, customPoints.length, pushAdj],
   )
 
-  const setCustomOffset = useCallback((n, dx, dy) => {
-    setCustomPoints((prev) => prev.map((c, k) => (k === n ? { ...c, dx, dy } : c)))
-  }, [])
+  const setCustomOffset = useCallback(
+    (n, dx, dy) => {
+      pushAdj(`custom-move:${n}`)
+      setCustomPoints((prev) => prev.map((c, k) => (k === n ? { ...c, dx, dy } : c)))
+    },
+    [pushAdj],
+  )
 
-  const removeCustomPoint = useCallback((n) => {
-    setCustomPoints((prev) => prev.filter((_, k) => k !== n))
+  const removeCustomPoint = useCallback(
+    (n) => {
+      pushAdj(`custom-del:${n}`)
+      setCustomPoints((prev) => prev.filter((_, k) => k !== n))
     // 后续点索引前移一位，选中态需要同步修正
     setSelectedPoint((cur) => {
       if (cur == null || cur < CUSTOM_BASE) return cur
@@ -797,7 +915,7 @@ export default function App() {
       if (idx === n) return null
       return idx > n ? cur - 1 : cur
     })
-  }, [])
+  }, [pushAdj])
 
   /**
    * 导出术前 / 术后对比图。
@@ -1210,6 +1328,24 @@ export default function App() {
     if (annOn) setAddMode(false)
   }, [annOn])
 
+  // 调整撤销快捷键：Ctrl+Z / Ctrl+Shift+Z
+  // 标注模式开着时让位给标注栈 —— 两条栈同时响应同一个快捷键会各撤一步，
+  // 用户看到的是「撤了两次」，比不能撤还让人困惑。
+  useEffect(() => {
+    if (annOn) return
+    const onKey = (e) => {
+      const tag = document.activeElement?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key.toLowerCase() !== 'z') return
+      e.preventDefault()
+      if (e.shiftKey) redoAdj()
+      else undoAdj()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [annOn, undoAdj, redoAdj])
+
   // 标注快捷键：撤销 / 重做 / 删除 / 方向键微调 / 素材缩放旋转
   useEffect(() => {
     if (!annOn) return
@@ -1272,10 +1408,11 @@ export default function App() {
   )
 
   const clearCustomPoints = useCallback(() => {
+    pushAdj('custom-clear')
     setCustomPoints([])
     setAddMode(false)
     setSelectedPoint((cur) => (cur != null && cur >= CUSTOM_BASE ? null : cur))
-  }, [])
+  }, [pushAdj])
 
   // ---- 调整后指标：基于形变后的点位重新测量（而非沿用原始 metrics）----
   // 用 previewPoints 而非 displayPoints：预览区常驻，故对比数据不随主图视图切换而消失。
@@ -1478,6 +1615,29 @@ export default function App() {
           <span className="brand-sub">面部比例分析 · Demo</span>
         </div>
         <div className="topbar-right">
+          {/* 调整撤销 / 重做：整场沟通都在反复试参数，没有回退就不敢伸手调。
+              标注模式下的 Ctrl+Z 归标注栈（先到先管），这里同理让位。 */}
+          <div className="adj-hist">
+            <button
+              type="button"
+              className="btn-ghost sm"
+              disabled={adjPast.length === 0}
+              onClick={undoAdj}
+              title="撤销上一步调整（Ctrl+Z）"
+            >
+              ↶ 撤销
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              disabled={adjFuture.length === 0}
+              onClick={redoAdj}
+              title="重做（Ctrl+Shift+Z）"
+            >
+              ↷ 重做
+            </button>
+            {adjPast.length > 0 && <span className="adj-hist-n">{adjPast.length} 步可撤</span>}
+          </div>
           <span className={`status status-${phase}`}>
             {phase === 'loading-model' && '模型加载中…'}
             {phase === 'ready' && `就绪${backend === 'cpu' ? '（CPU 降级）' : ''}`}
@@ -1674,7 +1834,10 @@ export default function App() {
               <div className="point-actions">
                 <button
                   className="btn-ghost sm"
-                  onClick={() => setCustomOffset(selectedCustom, 0, 0)}
+                  onClick={() => {
+                    pushAdj('custom-reset-one')
+                    setCustomOffset(selectedCustom, 0, 0)
+                  }}
                 >
                   重置该点
                 </button>
@@ -1761,15 +1924,21 @@ export default function App() {
               <div className="point-actions">
                 <button
                   className="btn-ghost sm"
-                  onClick={() => setOffset(selectedPoint, 0, 0)}
+                  onClick={() => {
+                    pushAdj(`pt-reset:${selectedPoint}`)
+                    setOffset(selectedPoint, 0, 0)
+                  }}
                 >
                   重置该点
                 </button>
-                <button
-                  className="btn-ghost sm"
-                  disabled={adjustedCount === 0}
-                  onClick={() => setPointOffsets(emptyOffsets())}
-                >
+                  <button
+                    className="btn-ghost sm"
+                    disabled={adjustedCount === 0}
+                    onClick={() => {
+                      pushAdj('pts-clear')
+                      setPointOffsets(emptyOffsets())
+                    }}
+                  >
                   点位全部归零
                 </button>
               </div>
@@ -1836,18 +2005,25 @@ export default function App() {
                 disabled={!points}
                 hint={mm ? `${s.hint} · 峰值位移约 ${mm}` : s.hint}
                 onChange={(v2) => {
+                  pushAdj(`slider:${s.key}`)
                   setParams((p) => ({ ...p, [s.key]: v2 }))
                   // 调参即视为要调整，自动切到「调整」视图查看照片形变
                   setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
                 }}
-                onReset={() => setParams((p) => ({ ...p, [s.key]: 0 }))}
+                onReset={() => {
+                  pushAdj(`slider-reset:${s.key}`)
+                  setParams((p) => ({ ...p, [s.key]: 0 }))
+                }}
               />
             )
           })}
           <button
             className="btn-ghost"
             disabled={!points}
-            onClick={() => setParams(DEFAULT_PARAMS)}
+            onClick={() => {
+              pushAdj('params-clear')
+              setParams(DEFAULT_PARAMS)
+            }}
           >
             全部归零
           </button>
@@ -1863,11 +2039,15 @@ export default function App() {
             scale={scale}
             disabled={!points}
             onChange={(key, v) => {
+              pushAdj(`site:${key}`)
+              pulseSite(key)
               setSiteValues((s) => ({ ...s, [key]: v }))
               // 调部位即视为要调整，自动切到「调整」视图查看照片形变
               setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
             }}
             onDepthChange={(key, v) => {
+              pushAdj(`depth:${key}`)
+              pulseSite(key)
               setSiteDepths((s) => ({ ...s, [key]: v }))
               // 凹凸只在形变照上才看得到，同样切到「调整」视图
               setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
@@ -1875,6 +2055,7 @@ export default function App() {
             onResetZone={(zoneKey) => {
               // 归零要连凹凸一起归 —— 只清位移、留着凹凸，脸会「鼓着但没挪」
               const keys = sitesOf(zoneKey).map((s) => s.key)
+              pushAdj(`site-reset-zone:${zoneKey}`)
               setSiteValues((s) => {
                 const next = { ...s }
                 for (const k of keys) next[k] = 0
@@ -1887,6 +2068,7 @@ export default function App() {
               })
             }}
             onResetAll={() => {
+              pushAdj('site-clear')
               setSiteValues(emptySites())
               setSiteDepths(emptySites())
             }}
@@ -1903,17 +2085,22 @@ export default function App() {
             scale={scale}
             disabled={!points}
             onChange={(key, v) => {
+              pushAdj(`subunit:${key}`)
               setSubunitValues((s) => ({ ...s, [key]: v }))
               setView((cur) => (cur === 'adjustment' ? cur : 'adjustment'))
             }}
-            onResetZone={(zoneKey) =>
+            onResetZone={(zoneKey) => {
+              pushAdj(`subunit-reset-zone:${zoneKey}`)
               setSubunitValues((s) => {
                 const next = { ...s }
                 for (const su of subunitsOf(zoneKey)) next[su.key] = 0
                 return next
               })
-            }
-            onResetAll={() => setSubunitValues(emptySubunits())}
+            }}
+            onResetAll={() => {
+              pushAdj('subunit-clear')
+              setSubunitValues(emptySubunits())
+            }}
             onHighlight={setHighlight}
           />
         </aside>
@@ -2023,6 +2210,8 @@ export default function App() {
                 relief={{ anchors: reliefAnchors, values: deferredSiteDepths }}
                 // 差异热区：形变往往只有一两个像素，靠它让客户一眼看出改了哪里
                 showDiff={isLayerOn(layerState, 'diff')}
+                // 刚调过的部位在预览上闪一下 —— 形变太小看不见时，至少知道改的是哪里
+                pulse={sitePulse}
                 maxEdge={900}
                 triangles={triangles}
                 customCount={0}

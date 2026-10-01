@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "malarValue": 30,
+  "canvas": "450x450",
+  "pxTotal": 202500,
+  "changedPx": 46,
+  "changedPct": 0.023,
+  "maxDelta": 91,
+  "avgDelta": 1.319
+}

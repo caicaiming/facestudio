@@ -4,6 +4,10 @@ dist/
 .DS_Store
 .vite/
 
+# 体验走查产物：截图不入库，但量化数据（json）留作复跑基线
+ux-audit-*.png
+ux-pixdiff-after.png
+
 # 根目录临时截图（冒烟/诊断产物，不入库）
 _*.png
 smoke-*.png
